@@ -1,2 +1,2 @@
-# kicad-test-plugin
+# KiTest
 Test harness for KiCad
