@@ -7,5 +7,5 @@ mod results;
 
 pub use analysis::Analysis;
 pub use backend::Backend;
-pub use ngspice::NgspiceError;
+pub use ngspice::{Ngspice, NgspiceError};
 pub use results::Results;

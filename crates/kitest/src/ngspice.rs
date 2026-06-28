@@ -1,9 +1,65 @@
 //! Running netlists through the `ngspice` binary.
 
-use std::collections::BTreeMap;
 use std::str::FromStr;
+use std::{collections::BTreeMap, path::Path};
 
-use crate::Results;
+use crate::{Analysis, Backend, Results};
+
+pub struct Ngspice {
+    binary: String,
+}
+
+impl Default for Ngspice {
+    fn default() -> Self {
+        Self {
+            binary: "ngspice".into(),
+        }
+    }
+}
+
+impl Backend for Ngspice {
+    type Error = NgspiceError;
+
+    fn run(&self, netlist: &str, analysis: Analysis) -> Result<Results, NgspiceError> {
+        let dir = tempfile::tempdir().map_err(NgspiceError::Io)?;
+        let deck_path = dir.path().join("deck.cir");
+        let raw_path = dir.path().join("out.raw");
+
+        std::fs::write(&deck_path, build_deck(netlist, &analysis, &raw_path))
+            .map_err(NgspiceError::Io)?;
+
+        let output = std::process::Command::new(&self.binary)
+            .arg("-b")
+            .arg(&deck_path)
+            .output()
+            .map_err(NgspiceError::Spawn)?;
+
+        if !output.status.success() {
+            return Err(NgspiceError::Exec {
+                code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let raw = std::fs::read_to_string(&raw_path).map_err(NgspiceError::Io)?;
+        parse_rawfile(&raw)
+    }
+}
+
+fn build_deck(netlist: &str, analysis: &Analysis, raw_path: &Path) -> String {
+    format!(
+        "{netlist}\n.control\n{cmd}\nset filetype=ascii\nwrite {raw}\n.endc\n.end\n",
+        cmd = directive(analysis),
+        raw = raw_path.display(),
+    )
+}
+
+/// The ngspice `.control` command for an analysis
+fn directive(analysis: &Analysis) -> &'static str {
+    match analysis {
+        Analysis::Op => "op",
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum NgspiceError {
@@ -182,5 +238,20 @@ Values:
         let raw =
             "No. Variables: 1\nNo. Points: 1\nVariables:\n 0 v(out) voltage\nValues:\n 0 oops\n";
         assert_parse_err(raw, "bad value");
+    }
+
+    #[test]
+    fn build_deck_wraps_netlist() {
+        let deck = build_deck(
+            "* t\nv1 a 0 dc 1\n",
+            &Analysis::Op,
+            Path::new("/tmp/out.raw"),
+        );
+        assert!(deck.contains("* t\nv1 a 0 dc 1\n"));
+        assert!(deck.contains("\nop\n"));
+        assert!(deck.contains("\nset filetype=ascii\n"));
+        assert!(deck.contains("\nwrite /tmp/out.raw\n"));
+        assert!(deck.contains("\n.endc\n"));
+        assert!(deck.ends_with(".end\n"));
     }
 }
