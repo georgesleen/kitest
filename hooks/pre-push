@@ -2,16 +2,4 @@
 # Local gate, mirrored in CI.
 set -euo pipefail
 
-echo "[pre-push] nix format check..."
-nixfmt --check $(find . -name '*.nix' -not -path './.git/*')
-
-echo "[pre-push] rust format check..."
-cargo fmt --check
-
-echo "[pre-push] clippy..."
-cargo clippy --all-targets --all-features -- -D warnings
-
-echo "[pre-push] tests..."
-cargo test
-
-echo "[pre-push] all checks passed."
+make fmt-check lint test
