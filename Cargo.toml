@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kitest-core"]
+members = ["crates/kitest"]
 
 [workspace.package]
 edition = "2024"

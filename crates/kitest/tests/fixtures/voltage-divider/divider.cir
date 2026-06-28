@@ -1,0 +1,11 @@
+* voltage divider
+v1 vin 0 dc 5
+r1 vin vout 10k
+r2 vout 0 10k
+
+.control
+op
+set filetype=ascii
+write divider.raw
+.endc
+.end
