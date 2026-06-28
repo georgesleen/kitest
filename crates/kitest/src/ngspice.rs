@@ -55,9 +55,10 @@ fn build_deck(netlist: &str, analysis: &Analysis, raw_path: &Path) -> String {
 }
 
 /// The ngspice `.control` command for an analysis
-fn directive(analysis: &Analysis) -> &'static str {
+fn directive(analysis: &Analysis) -> String {
     match analysis {
-        Analysis::Op => "op",
+        Analysis::Op => "op".to_string(),
+        Analysis::Tran { step, stop } => format!("tran {step} {stop}"),
     }
 }
 
@@ -238,6 +239,15 @@ Values:
         let raw =
             "No. Variables: 1\nNo. Points: 1\nVariables:\n 0 v(out) voltage\nValues:\n 0 oops\n";
         assert_parse_err(raw, "bad value");
+    }
+
+    #[test]
+    fn tran_directive_renders() {
+        let d = directive(&Analysis::Tran {
+            step: 1e-3,
+            stop: 5e-3,
+        });
+        assert_eq!(d, "tran 0.001 0.005");
     }
 
     #[test]
