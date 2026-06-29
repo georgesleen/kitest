@@ -1,4 +1,4 @@
-use kitest::{Analysis, Backend, Ngspice};
+use kitest::{Analysis, Backend, Ngspice, Tolerance};
 
 const DIVIDER: &str = "\
 * voltage divider
@@ -28,8 +28,9 @@ fn tran_charges_rc() {
         stop: 5e-3,
     };
     let r = Ngspice::default().run(RC, analysis).unwrap();
-    let vout = r.signal("v(vout)").expect("v(vout) present");
-    assert!(vout[0] < 0.05, "starts near 0: {}", vout[0]);
-    let last = *vout.last().unwrap();
-    assert!((last - 0.993).abs() < 0.02, "settles near 1-e^-5: {last}");
+    let vout = r.node("vout").expect("vout present");
+    assert!(
+        vout.settles_to(0.993, Tolerance::abs(0.02), 1e-3),
+        "did not settle"
+    );
 }
