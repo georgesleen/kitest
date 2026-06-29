@@ -33,4 +33,5 @@ fn tran_charges_rc() {
         vout.settles_to(0.993, Tolerance::abs(0.02), 1e-3),
         "did not settle"
     );
+    assert!(vout.overshoot(1.0) < 0.01, "unexpected overshoot");
 }

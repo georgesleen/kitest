@@ -50,6 +50,14 @@ impl<'a> Signal<'a> {
             .filter(|(t, _)| **t >= start)
             .all(|(_, v)| (*v - target).abs() <= band)
     }
+
+    /// Peak value above `target`, as a fraction of `target`.
+    pub fn overshoot(&self, target: f64) -> f64 {
+        match self.values.iter().copied().reduce(f64::max) {
+            Some(peak) => ((peak - target) / target.abs()).max(0.0),
+            None => f64::NAN,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -83,5 +91,19 @@ mod tests {
     fn rejects_empty_signal() {
         let s = Signal::new(&[], &[]);
         assert!(!s.settles_to(1.0, Tolerance::abs(0.05), 1.0));
+    }
+
+    #[test]
+    fn overshoot_measures_peak_above_target() {
+        let values = [0.0, 1.2, 1.0];
+        let s = Signal::new(&TIME[..3], &values);
+        assert!((s.overshoot(1.0) - 0.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn overshoot_zero_when_monotonic() {
+        let values = [0.0, 0.5, 1.0];
+        let s = Signal::new(&TIME[..3], &values);
+        assert_eq!(s.overshoot(1.0), 0.0);
     }
 }
