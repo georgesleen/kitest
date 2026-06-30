@@ -1,4 +1,4 @@
-use kitest::{Analysis, Backend, Ngspice, Tolerance};
+use kitest::{Analysis, Backend, Ngspice, Sweep, Tolerance};
 
 const DIVIDER: &str = "\
 * voltage divider
@@ -10,6 +10,13 @@ r2 vout 0 10k
 const RC: &str = "\
 * rc charge
 v1 vin 0 pulse(0 1 0 1n 1n 1 2)
+r1 vin vout 1k
+c1 vout 0 1u
+";
+
+const RC_LOWPASS: &str = "\
+* rc low-pass
+v1 vin 0 dc 0 ac 1
 r1 vin vout 1k
 c1 vout 0 1u
 ";
@@ -34,4 +41,27 @@ fn tran_charges_rc() {
         "did not settle"
     );
     assert!(vout.overshoot(1.0) < 0.01, "unexpected overshoot");
+}
+
+#[test]
+fn ac_rc_lowpass_cutoff() {
+    let analysis = Analysis::Ac {
+        sweep: Sweep::Dec,
+        points: 100,
+        fstart: 1.0,
+        fstop: 1e6,
+    };
+    let r = Ngspice::default().run(RC_LOWPASS, analysis).unwrap();
+    let resp = r.response("vout").expect("vout present");
+    let fc = 1.0 / (2.0 * std::f64::consts::PI * 1e3 * 1e-6);
+    assert!(
+        (resp.gain_db_at(fc).unwrap() + 3.01).abs() < 0.2,
+        "gain at cutoff = {}",
+        resp.gain_db_at(fc).unwrap()
+    );
+    assert!(
+        (resp.phase_deg_at(fc).unwrap() + 45.0).abs() < 2.0,
+        "phase at cutoff = {}",
+        resp.phase_deg_at(fc).unwrap()
+    );
 }
