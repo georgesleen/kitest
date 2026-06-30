@@ -7,5 +7,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+num-complex = "0.4.6"
 tempfile = "3.27.0"
 thiserror = "2"

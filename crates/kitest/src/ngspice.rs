@@ -3,6 +3,8 @@
 use std::str::FromStr;
 use std::{collections::BTreeMap, path::Path};
 
+use num_complex::Complex64;
+
 use crate::{Analysis, Backend, Results};
 
 pub struct Ngspice {
@@ -46,6 +48,21 @@ impl Backend for Ngspice {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum NgspiceError {
+    #[error("could not launch ngspice")]
+    Spawn(#[source] std::io::Error),
+
+    #[error("io error while running ngspice")]
+    Io(#[source] std::io::Error),
+
+    #[error("ngspice exited with status {code:?}:\n{stderr}")]
+    Exec { code: Option<i32>, stderr: String },
+
+    #[error("could not parse ngspice rawfile: {0}")]
+    Parse(String),
+}
+
 fn build_deck(netlist: &str, analysis: &Analysis, raw_path: &Path) -> String {
     format!(
         "{netlist}\n.control\n{cmd}\nset filetype=ascii\nwrite {raw}\n.endc\n.end\n",
@@ -62,35 +79,13 @@ fn directive(analysis: &Analysis) -> String {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum NgspiceError {
-    #[error("could not launch ngspice")]
-    Spawn(#[source] std::io::Error),
-
-    #[error("io error while running ngspice")]
-    Io(#[source] std::io::Error),
-
-    #[error("ngspice exited with status {code:?}:\n{stderr}")]
-    Exec { code: Option<i32>, stderr: String },
-
-    #[error("could not parse ngspice rawfile: {0}")]
-    Parse(String),
-}
-
-/// Parse `s` into a number, tagging a failure with `what` for the error message.
-fn parse_num<T: FromStr>(s: &str, what: &str) -> Result<T, NgspiceError> {
-    s.trim()
-        .parse()
-        .map_err(|_| NgspiceError::Parse(format!("bad {what}: {s:?}")))
-}
-
 /// Parse an ASCII ngspice rawfile into [Results].
 fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
     let mut lines = raw.lines();
-
-    // Collect number of variables and points
     let mut n_vars: Option<usize> = None;
     let mut n_points: Option<usize> = None;
+    let mut complex = false;
+
     for line in lines.by_ref() {
         if line.starts_with("Variables:") {
             break;
@@ -101,6 +96,7 @@ fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
         match key.trim() {
             "No. Variables" => n_vars = Some(parse_num(value, "count")?),
             "No. Points" => n_points = Some(parse_num(value, "count")?),
+            "Flags" => complex = value.contains("complex"),
             _ => {}
         }
     }
@@ -122,30 +118,70 @@ fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
     lines
         .find(|line| line.starts_with("Values:"))
         .ok_or_else(|| NgspiceError::Parse("missing Values section".into()))?;
-    let mut values = Vec::with_capacity(n_vars * n_points);
+
+    let count = n_vars * n_points;
+    if complex {
+        let values = collect_values(lines, count, parse_complex)?;
+        Ok(Results::complex(reshape(names, &values, n_vars, n_points)))
+    } else {
+        let values = collect_values(lines, count, |s| parse_num(s, "value"))?;
+        Ok(Results::real(reshape(names, &values, n_vars, n_points)))
+    }
+}
+
+/// Parse `s` into a number, tagging a failure with `what` for the error message.
+fn parse_num<T: FromStr>(s: &str, what: &str) -> Result<T, NgspiceError> {
+    s.trim()
+        .parse()
+        .map_err(|_| NgspiceError::Parse(format!("bad {what}: {s:?}")))
+}
+
+/// Parse one complex value written as `re,im`.
+fn parse_complex(s: &str) -> Result<Complex64, NgspiceError> {
+    let (re, im) = s
+        .split_once(',')
+        .ok_or_else(|| NgspiceError::Parse(format!("bad complex: {s:?}")))?;
+    Ok(Complex64::new(
+        parse_num(re, "value")?,
+        parse_num(im, "value")?,
+    ))
+}
+
+/// Read one trailing token per line from the `Values:` body into a flat list.
+fn collect_values<T>(
+    lines: std::str::Lines,
+    expected: usize,
+    parse: impl Fn(&str) -> Result<T, NgspiceError>,
+) -> Result<Vec<T>, NgspiceError> {
+    let mut values: Vec<T> = vec![];
     for line in lines {
         let Some(token) = line.split_whitespace().last() else {
             continue;
         };
-        values.push(parse_num(token, "value")?);
+        values.push(parse(token)?);
     }
-
-    if values.len() != n_vars * n_points {
+    if values.len() != expected {
         return Err(NgspiceError::Parse(format!(
-            "expected {} values, found {}",
-            n_vars * n_points,
+            "expected {expected} values, found {}",
             values.len()
         )));
     }
+    Ok(values)
+}
 
-    // Create signal structure
+/// Split a row-major value list into per-name columns.
+fn reshape<T: Copy>(
+    names: Vec<String>,
+    values: &[T],
+    n_vars: usize,
+    n_points: usize,
+) -> BTreeMap<String, Vec<T>> {
     let mut signals = BTreeMap::new();
     for (v, name) in names.into_iter().enumerate() {
         let signal = (0..n_points).map(|p| values[p * n_vars + v]).collect();
         signals.insert(name, signal);
     }
-
-    Ok(Results::new(signals))
+    signals
 }
 
 #[cfg(test)]
@@ -168,6 +204,22 @@ Values:
  1.0
  1 1.0e-3
  2.0
+";
+
+    const AC: &str = "\
+Title: synthetic
+Plotname: AC Analysis
+Flags: complex
+No. Variables: 2
+No. Points: 2
+Variables:
+ 0 frequency frequency
+ 1 v(out) voltage
+Values:
+ 0 1.0,0.0
+ 0.6,-0.8
+ 1 10.0,0.0
+ 0.3,-0.4
 ";
 
     fn fixture(name: &str) -> String {
@@ -209,6 +261,14 @@ Values:
         assert_signal(&r, "time", 1, 1.0e-3);
         assert_signal(&r, "v(out)", 0, 1.0);
         assert_signal(&r, "v(out)", 1, 2.0);
+    }
+
+    #[test]
+    fn parses_complex_ac() {
+        let r = parse_rawfile(AC).unwrap();
+        let out = r.spectrum("v(out)").expect("spectrum present");
+        assert_eq!(out[0], Complex64::new(0.6, -0.8));
+        assert!(r.signal("v(out)").is_none());
     }
 
     #[test]
