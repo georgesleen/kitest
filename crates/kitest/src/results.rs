@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use num_complex::Complex64;
 
-use crate::Signal;
+use crate::{Response, Signal};
 
 /// Signals from one analysis.
 #[derive(Debug)]
@@ -46,7 +46,21 @@ impl Results {
     }
 
     pub fn node(&self, name: &str) -> Option<Signal<'_>> {
-        let key = format!("v({})", name.to_lowercase());
-        Some(Signal::new(self.signal("time")?, self.signal(&key)?))
+        Some(Signal::new(
+            self.signal("time")?,
+            self.signal(&voltage_key(name))?,
+        ))
     }
+
+    pub fn response(&self, name: &str) -> Option<Response<'_>> {
+        Some(Response::new(
+            self.spectrum("frequency")?,
+            self.spectrum(&voltage_key(name))?,
+        ))
+    }
+}
+
+/// The ngspice rawfile key for a node voltage.
+fn voltage_key(name: &str) -> String {
+    format!("v({})", name.to_lowercase())
 }

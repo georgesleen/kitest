@@ -10,4 +10,4 @@ pub use analysis::{Analysis, Sweep};
 pub use backend::Backend;
 pub use ngspice::{Ngspice, NgspiceError};
 pub use results::Results;
-pub use signal::{Signal, Tolerance};
+pub use signal::{Response, Signal, Tolerance};
