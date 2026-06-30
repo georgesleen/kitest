@@ -76,6 +76,12 @@ fn directive(analysis: &Analysis) -> String {
     match analysis {
         Analysis::Op => "op".to_string(),
         Analysis::Tran { step, stop } => format!("tran {step} {stop}"),
+        Analysis::Ac {
+            sweep,
+            points,
+            fstart,
+            fstop,
+        } => format!("ac {} {points} {fstart} {fstop}", sweep.keyword()),
     }
 }
 
@@ -308,6 +314,17 @@ Values:
             stop: 5e-3,
         });
         assert_eq!(d, "tran 0.001 0.005");
+    }
+
+    #[test]
+    fn ac_directive_renders() {
+        let d = directive(&Analysis::Ac {
+            sweep: crate::Sweep::Dec,
+            points: 10,
+            fstart: 1.0,
+            fstop: 1e6,
+        });
+        assert_eq!(d, "ac dec 10 1 1000000");
     }
 
     #[test]

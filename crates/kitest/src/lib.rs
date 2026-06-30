@@ -6,7 +6,7 @@ mod ngspice;
 mod results;
 mod signal;
 
-pub use analysis::Analysis;
+pub use analysis::{Analysis, Sweep};
 pub use backend::Backend;
 pub use ngspice::{Ngspice, NgspiceError};
 pub use results::Results;
