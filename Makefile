@@ -1,6 +1,6 @@
 NIX_FILES := $(shell find . -name '*.nix' -not -path './.git/*')
 
-.PHONY: fmt fmt-check lint test build
+.PHONY: fmt fmt-check lint test pytest build
 
 fmt:
 	nixfmt $(NIX_FILES)
@@ -15,6 +15,11 @@ lint:
 
 test:
 	cargo test
+	$(MAKE) pytest
+
+pytest:
+	uv --directory crates/kitest-py run maturin develop
+	uv --directory crates/kitest-py run pytest
 
 build:
 	cargo build

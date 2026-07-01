@@ -26,7 +26,12 @@
               rustfmt
               rust-analyzer
               ngspice
+              python3
+              uv
             ];
+
+            # Never let uv fetch its own python; it uses the nix python3 on PATH.
+            env.UV_PYTHON_DOWNLOADS = "never";
           };
         }
       );

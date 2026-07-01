@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kitest"
+version = "0.0.0"
+requires-python = ">=3.9"
+
+[dependency-groups]
+dev = ["pytest", "maturin"]
+
+[tool.maturin]
+module-name = "kitest"
