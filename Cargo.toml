@@ -4,5 +4,5 @@ members = ["crates/kitest", "crates/kitest-py"]
 
 [workspace.package]
 edition = "2024"
-license = "AGPL-3.0-only"
+license = "LGPL-3.0-or-later"
 repository = "https://github.com/georgesleen/kitest"
