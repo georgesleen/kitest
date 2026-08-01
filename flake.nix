@@ -28,6 +28,7 @@
               ngspice
               python3
               uv
+              kicad-small
             ];
 
             # Never let uv fetch its own python; it uses the nix python3 on PATH.
