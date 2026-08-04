@@ -35,6 +35,7 @@ __pycache__/
 *.kicad_prl
 *-bak
 *.bak
+*-backups/
 _autosave-*
 *.lck
 fp-info-cache

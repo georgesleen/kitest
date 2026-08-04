@@ -1,0 +1,4 @@
+.title KiCad schematic
+R1 +5V /out 10k
+R2 /out GND 10k
+.end
