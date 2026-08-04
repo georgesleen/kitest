@@ -1,10 +1,18 @@
-use crate::{Analysis, Results};
+//! The simulation backend seam.
 
-/// A SPICE engine that runs a netlist and returns its results.
+use crate::{Ac, OperatingPoint, Spectra, Tran, Waveforms};
+
+/// A SPICE engine kitest can drive. Netlists carry no analysis directive of their
+/// own; the analysis called supplies it and decides the result type.
 pub trait Backend {
     type Error: std::error::Error + 'static;
 
-    /// Run `analysis` on `netlist`, raw SPICE text carrying no analysis directive
-    /// of its own.
-    fn run(&self, netlist: &str, analysis: Analysis) -> Result<Results, Self::Error>;
+    /// DC operating point.
+    fn run_op(&self, netlist: &str) -> Result<OperatingPoint, Self::Error>;
+
+    /// Transient analysis.
+    fn run_tran(&self, netlist: &str, params: Tran) -> Result<Waveforms, Self::Error>;
+
+    /// Small-signal AC sweep.
+    fn run_ac(&self, netlist: &str, params: Ac) -> Result<Spectra, Self::Error>;
 }

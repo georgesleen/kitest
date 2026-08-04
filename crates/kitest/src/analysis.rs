@@ -1,19 +1,19 @@
-//! Type of SPICE analysis a backend runs.
+//! Analysis parameters a backend can run.
 
-/// Types of analysis to run on a circuit.
-#[derive(Debug, Clone)]
-pub enum Analysis {
-    /// DC operating point.
-    Op,
-    /// Transient analysis, times in seconds.
-    Tran { step: f64, stop: f64 },
-    /// Small-signal AC sweep, frequencies in Hz.
-    Ac {
-        sweep: Sweep,
-        points: u32,
-        fstart: f64,
-        fstop: f64,
-    },
+/// Transient analysis parameters, times in seconds.
+#[derive(Debug, Clone, Copy)]
+pub struct Tran {
+    pub step: f64,
+    pub stop: f64,
+}
+
+/// Small-signal AC sweep parameters, frequencies in Hz.
+#[derive(Debug, Clone, Copy)]
+pub struct Ac {
+    pub sweep: Sweep,
+    pub points: u32,
+    pub fstart: f64,
+    pub fstop: f64,
 }
 
 /// Frequency axis spacing for an AC sweep.

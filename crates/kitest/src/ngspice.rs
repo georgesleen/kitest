@@ -1,11 +1,24 @@
 //! Running netlists through the `ngspice` binary.
+//!
+//! This module is the only place that knows ngspice's rawfile format. It parses
+//! the raw text into a neutral [`RawTable`], then each analysis validates the
+//! table it expects and maps it to a domain result type.
 
 use std::str::FromStr;
 use std::{collections::BTreeMap, path::Path};
 
 use num_complex::Complex64;
 
-use crate::{Analysis, Backend, Results};
+use crate::{Ac, Backend, OperatingPoint, Spectra, Tran, Waveforms};
+
+/// ngspice plotname for each analysis, used to validate a rawfile is what we ran.
+const PLOTNAME_OP: &str = "Operating Point";
+const PLOTNAME_TRAN: &str = "Transient Analysis";
+const PLOTNAME_AC: &str = "AC Analysis";
+
+/// The independent-variable column ngspice emits for each swept analysis.
+const AXIS_TIME: &str = "time";
+const AXIS_FREQUENCY: &str = "frequency";
 
 pub struct Ngspice {
     binary: String,
@@ -22,12 +35,27 @@ impl Default for Ngspice {
 impl Backend for Ngspice {
     type Error = NgspiceError;
 
-    fn run(&self, netlist: &str, analysis: Analysis) -> Result<Results, NgspiceError> {
+    fn run_op(&self, netlist: &str) -> Result<OperatingPoint, NgspiceError> {
+        operating_point(self.run_raw(netlist, "op")?)
+    }
+
+    fn run_tran(&self, netlist: &str, params: Tran) -> Result<Waveforms, NgspiceError> {
+        waveforms(self.run_raw(netlist, &tran_command(&params))?)
+    }
+
+    fn run_ac(&self, netlist: &str, params: Ac) -> Result<Spectra, NgspiceError> {
+        spectra(self.run_raw(netlist, &ac_command(&params))?)
+    }
+}
+
+impl Ngspice {
+    /// Run one `.control` directive and parse the rawfile it writes.
+    fn run_raw(&self, netlist: &str, directive: &str) -> Result<RawTable, NgspiceError> {
         let dir = tempfile::tempdir().map_err(NgspiceError::Io)?;
         let deck_path = dir.path().join("deck.cir");
         let raw_path = dir.path().join("out.raw");
 
-        std::fs::write(&deck_path, build_deck(netlist, &analysis, &raw_path))
+        std::fs::write(&deck_path, build_deck(netlist, directive, &raw_path))
             .map_err(NgspiceError::Io)?;
 
         let output = std::process::Command::new(&self.binary)
@@ -44,7 +72,7 @@ impl Backend for Ngspice {
         }
 
         let raw = std::fs::read_to_string(&raw_path).map_err(NgspiceError::Io)?;
-        parse_rawfile(&raw)
+        parse_table(&raw)
     }
 }
 
@@ -63,31 +91,45 @@ pub enum NgspiceError {
     Parse(String),
 }
 
-fn build_deck(netlist: &str, analysis: &Analysis, raw_path: &Path) -> String {
+fn build_deck(netlist: &str, directive: &str, raw_path: &Path) -> String {
     format!(
-        "{netlist}\n.control\n{cmd}\nset filetype=ascii\nwrite {raw}\n.endc\n.end\n",
-        cmd = directive(analysis),
+        "{netlist}\n.control\n{directive}\nset filetype=ascii\nwrite {raw}\n.endc\n.end\n",
         raw = raw_path.display(),
     )
 }
 
-/// The ngspice `.control` command for an analysis
-fn directive(analysis: &Analysis) -> String {
-    match analysis {
-        Analysis::Op => "op".to_string(),
-        Analysis::Tran { step, stop } => format!("tran {step} {stop}"),
-        Analysis::Ac {
-            sweep,
-            points,
-            fstart,
-            fstop,
-        } => format!("ac {} {points} {fstart} {fstop}", sweep.keyword()),
-    }
+fn tran_command(params: &Tran) -> String {
+    format!("tran {} {}", params.step, params.stop)
 }
 
-/// Parse an ASCII ngspice rawfile into [Results].
-fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
+fn ac_command(params: &Ac) -> String {
+    format!(
+        "ac {} {} {} {}",
+        params.sweep.keyword(),
+        params.points,
+        params.fstart,
+        params.fstop,
+    )
+}
+
+/// A parsed rawfile, before it is interpreted as a particular analysis domain.
+#[derive(Debug)]
+struct RawTable {
+    plotname: String,
+    n_points: usize,
+    columns: Columns,
+}
+
+#[derive(Debug)]
+enum Columns {
+    Real(BTreeMap<String, Vec<f64>>),
+    Complex(BTreeMap<String, Vec<Complex64>>),
+}
+
+/// Parse an ASCII ngspice rawfile into a neutral [`RawTable`].
+fn parse_table(raw: &str) -> Result<RawTable, NgspiceError> {
     let mut lines = raw.lines();
+    let mut plotname = None;
     let mut n_vars: Option<usize> = None;
     let mut n_points: Option<usize> = None;
     let mut complex = false;
@@ -100,6 +142,7 @@ fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
             continue;
         };
         match key.trim() {
+            "Plotname" => plotname = Some(value.trim().to_owned()),
             "No. Variables" => n_vars = Some(parse_num(value, "count")?),
             "No. Points" => n_points = Some(parse_num(value, "count")?),
             "Flags" => complex = value.contains("complex"),
@@ -107,10 +150,10 @@ fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
         }
     }
 
+    let plotname = plotname.ok_or_else(|| NgspiceError::Parse("missing Plotname".into()))?;
     let n_vars = n_vars.ok_or_else(|| NgspiceError::Parse("missing No. Variables".into()))?;
     let n_points = n_points.ok_or_else(|| NgspiceError::Parse("missing No. Points".into()))?;
 
-    // Collect variable names
     let mut names = Vec::with_capacity(n_vars);
     for line in lines.by_ref().take(n_vars) {
         let name = line
@@ -120,19 +163,102 @@ fn parse_rawfile(raw: &str) -> Result<Results, NgspiceError> {
         names.push(name.to_owned());
     }
 
-    // Collect variable values
     lines
         .find(|line| line.starts_with("Values:"))
         .ok_or_else(|| NgspiceError::Parse("missing Values section".into()))?;
 
     let count = n_vars * n_points;
-    if complex {
+    let columns = if complex {
         let values = collect_values(lines, count, parse_complex)?;
-        Ok(Results::complex(reshape(names, &values, n_vars, n_points)))
+        Columns::Complex(reshape(names, &values, n_vars, n_points))
     } else {
         let values = collect_values(lines, count, |s| parse_num(s, "value"))?;
-        Ok(Results::real(reshape(names, &values, n_vars, n_points)))
+        Columns::Real(reshape(names, &values, n_vars, n_points))
+    };
+
+    Ok(RawTable {
+        plotname,
+        n_points,
+        columns,
+    })
+}
+
+/// Interpret a rawfile as an operating point: one real value per node.
+fn operating_point(table: RawTable) -> Result<OperatingPoint, NgspiceError> {
+    expect_plotname(&table, PLOTNAME_OP)?;
+    let columns = real_columns(table.columns, "operating point")?;
+    if table.n_points != 1 {
+        return Err(NgspiceError::Parse(format!(
+            "operating point has {} points, expected 1",
+            table.n_points
+        )));
     }
+    let voltages = columns
+        .into_iter()
+        .filter_map(|(var, series)| Some((node_name(&var)?.to_owned(), series[0])))
+        .collect();
+    Ok(OperatingPoint::new(voltages))
+}
+
+/// Interpret a rawfile as transient waveforms: a `time` axis plus node series.
+fn waveforms(table: RawTable) -> Result<Waveforms, NgspiceError> {
+    expect_plotname(&table, PLOTNAME_TRAN)?;
+    let mut columns = real_columns(table.columns, "transient")?;
+    let time = columns
+        .remove(AXIS_TIME)
+        .ok_or_else(|| NgspiceError::Parse("transient result missing time axis".into()))?;
+    Ok(Waveforms::new(time, node_signals(columns)))
+}
+
+/// Interpret a rawfile as an AC sweep: a `frequency` axis plus complex node series.
+fn spectra(table: RawTable) -> Result<Spectra, NgspiceError> {
+    expect_plotname(&table, PLOTNAME_AC)?;
+    let Columns::Complex(mut columns) = table.columns else {
+        return Err(NgspiceError::Parse(
+            "AC result is not complex-valued".into(),
+        ));
+    };
+    let frequency = columns
+        .remove(AXIS_FREQUENCY)
+        .ok_or_else(|| NgspiceError::Parse("AC result missing frequency axis".into()))?
+        .into_iter()
+        .map(|c| c.re)
+        .collect();
+    Ok(Spectra::new(frequency, node_signals(columns)))
+}
+
+/// Error unless the rawfile's plotname is the one this analysis produces.
+fn expect_plotname(table: &RawTable, expected: &str) -> Result<(), NgspiceError> {
+    if table.plotname == expected {
+        Ok(())
+    } else {
+        Err(NgspiceError::Parse(format!(
+            "expected plotname {expected:?}, got {:?}",
+            table.plotname
+        )))
+    }
+}
+
+fn real_columns(columns: Columns, what: &str) -> Result<BTreeMap<String, Vec<f64>>, NgspiceError> {
+    match columns {
+        Columns::Real(m) => Ok(m),
+        Columns::Complex(_) => Err(NgspiceError::Parse(format!(
+            "{what} result is not real-valued"
+        ))),
+    }
+}
+
+/// Rekey voltage columns (`v(node)`) by bare node name, dropping non-voltage vars.
+fn node_signals<T>(columns: BTreeMap<String, Vec<T>>) -> BTreeMap<String, Vec<T>> {
+    columns
+        .into_iter()
+        .filter_map(|(var, series)| Some((node_name(&var)?.to_owned(), series)))
+        .collect()
+}
+
+/// The node inside a voltage variable: `v(out)` -> `out`; `None` for other vars.
+fn node_name(var: &str) -> Option<&str> {
+    var.strip_prefix("v(")?.strip_suffix(')')
 }
 
 /// Parse `s` into a number, tagging a failure with `what` for the error message.
@@ -193,6 +319,7 @@ fn reshape<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Sweep;
 
     const PARSE_EPS: f64 = 1e-12;
 
@@ -233,16 +360,8 @@ Values:
         std::fs::read_to_string(path).unwrap()
     }
 
-    fn assert_signal(r: &Results, name: &str, point: usize, expected: f64) {
-        let got = r.signal(name).expect("signal present")[point];
-        assert!(
-            (got - expected).abs() < PARSE_EPS,
-            "{name}[{point}] = {got}, expected {expected}"
-        );
-    }
-
     fn assert_parse_err(raw: &str, needle: &str) {
-        let err = parse_rawfile(raw).expect_err("expected parse failure");
+        let err = parse_table(raw).expect_err("expected parse failure");
         let msg = err.to_string();
         assert!(
             msg.contains(needle),
@@ -252,29 +371,50 @@ Values:
 
     #[test]
     fn parses_op_point() {
-        let raw = fixture("voltage-divider/divider.raw");
-        let r = parse_rawfile(&raw).unwrap();
-        assert_signal(&r, "v(vin)", 0, 5.0);
-        assert_signal(&r, "i(v1)", 0, -2.5e-4);
-        assert_signal(&r, "v(vout)", 0, 2.5);
-        assert!(r.signal("nope").is_none());
+        let table = parse_table(&fixture("voltage-divider/divider.raw")).unwrap();
+        let op = operating_point(table).unwrap();
+        assert!((op.node("vin").unwrap() - 5.0).abs() < PARSE_EPS);
+        assert!((op.node("vout").unwrap() - 2.5).abs() < PARSE_EPS);
+        assert!(op.node("nope").is_none());
     }
 
     #[test]
     fn reshapes_multiple_points() {
-        let r = parse_rawfile(TRANSIENT).unwrap();
-        assert_signal(&r, "time", 0, 0.0);
-        assert_signal(&r, "time", 1, 1.0e-3);
-        assert_signal(&r, "v(out)", 0, 1.0);
-        assert_signal(&r, "v(out)", 1, 2.0);
+        let out = waveforms(parse_table(TRANSIENT).unwrap()).unwrap();
+        let out = out.node("out").expect("node present");
+        assert_eq!(out.time(), &[0.0, 1.0e-3]);
+        assert_eq!(out.values(), &[1.0, 2.0]);
     }
 
     #[test]
     fn parses_complex_ac() {
-        let r = parse_rawfile(AC).unwrap();
-        let out = r.spectrum("v(out)").expect("spectrum present");
-        assert_eq!(out[0], Complex64::new(0.6, -0.8));
-        assert!(r.signal("v(out)").is_none());
+        let spectra = spectra(parse_table(AC).unwrap()).unwrap();
+        let out = spectra.node("out").expect("response present");
+        assert_eq!(out.freq(), &[1.0, 10.0]);
+        assert_eq!(out.values()[0], Complex64::new(0.6, -0.8));
+    }
+
+    #[test]
+    fn rejects_wrong_domain_plotname() {
+        // A transient rawfile handed to the operating-point interpreter.
+        let err = operating_point(parse_table(TRANSIENT).unwrap()).expect_err("wrong plotname");
+        assert!(err.to_string().contains("Operating Point"));
+    }
+
+    #[test]
+    fn rejects_transient_without_time_axis() {
+        let raw = "\
+Plotname: Transient Analysis
+Flags: real
+No. Variables: 1
+No. Points: 1
+Variables:
+ 0 v(out) voltage
+Values:
+ 0 1.0
+";
+        let err = waveforms(parse_table(raw).unwrap()).expect_err("missing time axis");
+        assert!(err.to_string().contains("time axis"));
     }
 
     #[test]
@@ -288,52 +428,50 @@ Values:
     #[test]
     fn rejects_missing_values_section() {
         assert_parse_err(
-            "No. Variables: 1\nNo. Points: 1\nVariables:\n 0 v(out) voltage\n",
+            "Plotname: Operating Point\nNo. Variables: 1\nNo. Points: 1\nVariables:\n 0 v(out) voltage\n",
             "Values",
         );
     }
 
     #[test]
     fn rejects_point_count_mismatch() {
-        let raw =
-            "No. Variables: 1\nNo. Points: 2\nVariables:\n 0 v(out) voltage\nValues:\n 0 1.0\n";
+        let raw = "Plotname: Operating Point\nNo. Variables: 1\nNo. Points: 2\nVariables:\n 0 v(out) voltage\nValues:\n 0 1.0\n";
         assert_parse_err(raw, "expected");
     }
 
     #[test]
     fn rejects_non_numeric_value() {
-        let raw =
-            "No. Variables: 1\nNo. Points: 1\nVariables:\n 0 v(out) voltage\nValues:\n 0 oops\n";
+        let raw = "Plotname: Operating Point\nNo. Variables: 1\nNo. Points: 1\nVariables:\n 0 v(out) voltage\nValues:\n 0 oops\n";
         assert_parse_err(raw, "bad value");
     }
 
     #[test]
-    fn tran_directive_renders() {
-        let d = directive(&Analysis::Tran {
-            step: 1e-3,
-            stop: 5e-3,
-        });
-        assert_eq!(d, "tran 0.001 0.005");
+    fn tran_command_renders() {
+        assert_eq!(
+            tran_command(&Tran {
+                step: 1e-3,
+                stop: 5e-3,
+            }),
+            "tran 0.001 0.005"
+        );
     }
 
     #[test]
-    fn ac_directive_renders() {
-        let d = directive(&Analysis::Ac {
-            sweep: crate::Sweep::Dec,
-            points: 10,
-            fstart: 1.0,
-            fstop: 1e6,
-        });
-        assert_eq!(d, "ac dec 10 1 1000000");
+    fn ac_command_renders() {
+        assert_eq!(
+            ac_command(&Ac {
+                sweep: Sweep::Dec,
+                points: 10,
+                fstart: 1.0,
+                fstop: 1e6,
+            }),
+            "ac dec 10 1 1000000"
+        );
     }
 
     #[test]
     fn build_deck_wraps_netlist() {
-        let deck = build_deck(
-            "* t\nv1 a 0 dc 1\n",
-            &Analysis::Op,
-            Path::new("/tmp/out.raw"),
-        );
+        let deck = build_deck("* t\nv1 a 0 dc 1\n", "op", Path::new("/tmp/out.raw"));
         assert!(deck.contains("* t\nv1 a 0 dc 1\n"));
         assert!(deck.contains("\nop\n"));
         assert!(deck.contains("\nset filetype=ascii\n"));

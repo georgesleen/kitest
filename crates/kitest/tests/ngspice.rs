@@ -1,4 +1,4 @@
-use kitest::{Analysis, Backend, Ngspice, Sweep, Tolerance};
+use kitest::{Ac, Backend, Ngspice, Sweep, Tolerance, Tran};
 
 const DIVIDER: &str = "\
 * voltage divider
@@ -23,18 +23,22 @@ c1 vout 0 1u
 
 #[test]
 fn op_solves_voltage_divider() {
-    let r = Ngspice::default().run(DIVIDER, Analysis::Op).unwrap();
-    let vout = r.signal("v(vout)").expect("v(vout) present")[0];
+    let r = Ngspice::default().run_op(DIVIDER).unwrap();
+    let vout = r.node("vout").expect("v(vout) present");
     assert!((vout - 2.5).abs() < 1e-6, "v(vout) = {vout}");
 }
 
 #[test]
 fn tran_charges_rc() {
-    let analysis = Analysis::Tran {
-        step: 1e-5,
-        stop: 5e-3,
-    };
-    let r = Ngspice::default().run(RC, analysis).unwrap();
+    let r = Ngspice::default()
+        .run_tran(
+            RC,
+            Tran {
+                step: 1e-5,
+                stop: 5e-3,
+            },
+        )
+        .unwrap();
     let vout = r.node("vout").expect("vout present");
     assert!(
         vout.settles_to(0.993, Tolerance::abs(0.02), 1e-3),
@@ -45,14 +49,18 @@ fn tran_charges_rc() {
 
 #[test]
 fn ac_rc_lowpass_cutoff() {
-    let analysis = Analysis::Ac {
-        sweep: Sweep::Dec,
-        points: 100,
-        fstart: 1.0,
-        fstop: 1e6,
-    };
-    let r = Ngspice::default().run(RC_LOWPASS, analysis).unwrap();
-    let resp = r.response("vout").expect("vout present");
+    let r = Ngspice::default()
+        .run_ac(
+            RC_LOWPASS,
+            Ac {
+                sweep: Sweep::Dec,
+                points: 100,
+                fstart: 1.0,
+                fstop: 1e6,
+            },
+        )
+        .unwrap();
+    let resp = r.node("vout").expect("vout present");
     let fc = 1.0 / (2.0 * std::f64::consts::PI * 1e3 * 1e-6);
     assert!(
         (resp.gain_db_at(fc).unwrap() + 3.01).abs() < 0.2,

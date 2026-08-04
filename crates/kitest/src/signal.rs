@@ -13,6 +13,16 @@ impl<'a> Signal<'a> {
         Self { time, values }
     }
 
+    /// The time axis, in seconds.
+    pub fn time(&self) -> &[f64] {
+        self.time
+    }
+
+    /// The sampled values.
+    pub fn values(&self) -> &[f64] {
+        self.values
+    }
+
     /// True if signal stays within `tol` of `target` over the last `window` seconds.
     pub fn settles_to(&self, target: f64, tol: Tolerance, window: f64) -> bool {
         let band = tol.band(target);
@@ -39,9 +49,9 @@ impl<'a> Signal<'a> {
     }
 }
 
-/// A frequency-domain response: complex values over a frequency axis.
+/// A frequency-domain response: complex values over a (real) frequency axis.
 pub struct Response<'a> {
-    freq: &'a [Complex64],
+    freq: &'a [f64],
     values: &'a [Complex64],
 }
 
@@ -49,16 +59,26 @@ impl<'a> Response<'a> {
     /// Decibels per decade of amplitude ratio.
     const DB_PER_DECADE: f64 = 20.0;
 
-    pub(crate) fn new(freq: &'a [Complex64], values: &'a [Complex64]) -> Self {
+    pub(crate) fn new(freq: &'a [f64], values: &'a [Complex64]) -> Self {
         Self { freq, values }
+    }
+
+    /// The frequency axis, in Hz.
+    pub fn freq(&self) -> &[f64] {
+        self.freq
+    }
+
+    /// The complex response values.
+    pub fn values(&self) -> &[Complex64] {
+        self.values
     }
 
     /// Index of the sweep point whose frequency is nearest `f` Hz.
     fn nearest(&self, f: f64) -> Option<usize> {
         (0..self.freq.len()).min_by(|&a, &b| {
-            (self.freq[a].re - f)
+            (self.freq[a] - f)
                 .abs()
-                .total_cmp(&(self.freq[b].re - f).abs())
+                .total_cmp(&(self.freq[b] - f).abs())
         })
     }
 
@@ -150,7 +170,7 @@ mod tests {
         assert_eq!(s.overshoot(1.0), 0.0);
     }
 
-    const FREQ: [Complex64; 2] = [Complex64::new(1.0, 0.0), Complex64::new(10.0, 0.0)];
+    const FREQ: [f64; 2] = [1.0, 10.0];
 
     #[test]
     fn gain_db_reads_nearest_point() {

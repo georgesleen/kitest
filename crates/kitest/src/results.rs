@@ -1,4 +1,4 @@
-//! Parsed output of a simulation run.
+//! Parsed simulation outputs, one type per analysis domain.
 
 use std::collections::BTreeMap;
 
@@ -6,61 +6,61 @@ use num_complex::Complex64;
 
 use crate::{Response, Signal};
 
-/// Signals from one analysis.
+/// DC operating-point voltages, one value per node.
 #[derive(Debug)]
-pub struct Results {
-    data: Data,
+pub struct OperatingPoint {
+    voltages: BTreeMap<String, f64>,
 }
 
-#[derive(Debug)]
-enum Data {
-    Real(BTreeMap<String, Vec<f64>>),
-    Complex(BTreeMap<String, Vec<Complex64>>),
+impl OperatingPoint {
+    pub(crate) fn new(voltages: BTreeMap<String, f64>) -> Self {
+        Self { voltages }
+    }
+
+    /// DC voltage at `node`, or `None` if that node is absent.
+    pub fn node(&self, node: &str) -> Option<f64> {
+        self.voltages.get(&node.to_lowercase()).copied()
+    }
 }
 
-impl Results {
-    pub(crate) fn real(signals: BTreeMap<String, Vec<f64>>) -> Self {
-        Self {
-            data: Data::Real(signals),
-        }
+/// Time-domain waveforms from a transient analysis.
+#[derive(Debug)]
+pub struct Waveforms {
+    time: Vec<f64>,
+    signals: BTreeMap<String, Vec<f64>>,
+}
+
+impl Waveforms {
+    pub(crate) fn new(time: Vec<f64>, signals: BTreeMap<String, Vec<f64>>) -> Self {
+        Self { time, signals }
     }
 
-    pub(crate) fn complex(signals: BTreeMap<String, Vec<Complex64>>) -> Self {
-        Self {
-            data: Data::Complex(signals),
-        }
-    }
-
-    pub fn signal(&self, name: &str) -> Option<&[f64]> {
-        match &self.data {
-            Data::Real(m) => m.get(name).map(Vec::as_slice),
-            Data::Complex(_) => None,
-        }
-    }
-
-    pub fn spectrum(&self, name: &str) -> Option<&[Complex64]> {
-        match &self.data {
-            Data::Complex(m) => m.get(name).map(Vec::as_slice),
-            Data::Real(_) => None,
-        }
-    }
-
-    pub fn node(&self, name: &str) -> Option<Signal<'_>> {
+    /// Waveform at `node`, or `None` if that node is absent.
+    pub fn node(&self, node: &str) -> Option<Signal<'_>> {
         Some(Signal::new(
-            self.signal("time")?,
-            self.signal(&voltage_key(name))?,
-        ))
-    }
-
-    pub fn response(&self, name: &str) -> Option<Response<'_>> {
-        Some(Response::new(
-            self.spectrum("frequency")?,
-            self.spectrum(&voltage_key(name))?,
+            &self.time,
+            self.signals.get(&node.to_lowercase())?,
         ))
     }
 }
 
-/// The ngspice rawfile key for a node voltage.
-fn voltage_key(name: &str) -> String {
-    format!("v({})", name.to_lowercase())
+/// Frequency-domain responses from an AC analysis.
+#[derive(Debug)]
+pub struct Spectra {
+    frequency: Vec<f64>,
+    signals: BTreeMap<String, Vec<Complex64>>,
+}
+
+impl Spectra {
+    pub(crate) fn new(frequency: Vec<f64>, signals: BTreeMap<String, Vec<Complex64>>) -> Self {
+        Self { frequency, signals }
+    }
+
+    /// Response at `node`, or `None` if that node is absent.
+    pub fn node(&self, node: &str) -> Option<Response<'_>> {
+        Some(Response::new(
+            &self.frequency,
+            self.signals.get(&node.to_lowercase())?,
+        ))
+    }
 }
