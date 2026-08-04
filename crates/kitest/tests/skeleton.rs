@@ -1,0 +1,20 @@
+//! The walking skeleton: a KiCad design driven through the full pipeline.
+
+use kitest::{Backend, Ngspice, export_netlist, with_supplies};
+use std::path::Path;
+
+const DIVIDER_SCH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/divider/divider.kicad_sch"
+);
+
+#[test]
+fn divider_op_from_kicad() {
+    let netlist = export_netlist(Path::new(DIVIDER_SCH)).unwrap();
+    let deck = with_supplies(&netlist, &[("+5V", 5.0)]);
+
+    let result = Ngspice::default().run_op(&deck).unwrap();
+    let out = result.node("/out").expect("/out present");
+
+    assert!((out - 2.5).abs() < 1e-6, "out = {out}");
+}
