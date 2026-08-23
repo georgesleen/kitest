@@ -1,6 +1,6 @@
 //! Running netlists through the `ngspice` binary.
 //!
-//! This module is the only place that knows ngspice's rawfile format. It parses
+//! This module is the only place that knows ngspice's raw file format. It parses
 //! the raw text into a neutral [`RawTable`], then each analysis validates the
 //! table it expects and maps it to a domain result type.
 
@@ -9,9 +9,10 @@ use std::{collections::BTreeMap, path::Path};
 
 use num_complex::Complex64;
 
-use crate::{Ac, Backend, OperatingPoint, Spectra, Tran, Waveforms};
+use crate::stimulus::{AcSupply, inject};
+use crate::{Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, Waveforms};
 
-/// ngspice plotname for each analysis, used to validate a rawfile is what we ran.
+/// Ngspice plotname for each analysis, used to validate a raw file is what we ran.
 const PLOTNAME_OP: &str = "Operating Point";
 const PLOTNAME_TRAN: &str = "Transient Analysis";
 const PLOTNAME_AC: &str = "AC Analysis";
@@ -35,21 +36,28 @@ impl Default for Ngspice {
 impl Backend for Ngspice {
     type Error = NgspiceError;
 
-    fn run_op(&self, netlist: &str) -> Result<OperatingPoint, NgspiceError> {
-        operating_point(self.run_raw(netlist, "op")?)
+    fn run_op(&self, netlist: &str, supplies: &[DcSupply]) -> Result<OperatingPoint, NgspiceError> {
+        let deck = inject(netlist, supplies);
+        operating_point(self.run_raw(&deck, "op")?)
     }
 
     fn run_tran(&self, netlist: &str, params: Tran) -> Result<Waveforms, NgspiceError> {
         waveforms(self.run_raw(netlist, &tran_command(&params))?)
     }
 
-    fn run_ac(&self, netlist: &str, params: Ac) -> Result<Spectra, NgspiceError> {
-        spectra(self.run_raw(netlist, &ac_command(&params))?)
+    fn run_ac(
+        &self,
+        netlist: &str,
+        supplies: &[AcSupply],
+        params: Ac,
+    ) -> Result<Spectra, NgspiceError> {
+        let deck = inject(netlist, supplies);
+        spectra(self.run_raw(&deck, &ac_command(&params))?)
     }
 }
 
 impl Ngspice {
-    /// Run one `.control` directive and parse the rawfile it writes.
+    /// Run one `.control` directive and parse the raw file it writes.
     fn run_raw(&self, netlist: &str, directive: &str) -> Result<RawTable, NgspiceError> {
         let dir = tempfile::tempdir().map_err(NgspiceError::Io)?;
         let deck_path = dir.path().join("deck.cir");
@@ -112,7 +120,7 @@ fn ac_command(params: &Ac) -> String {
     )
 }
 
-/// A parsed rawfile, before it is interpreted as a particular analysis domain.
+/// A parsed raw file, before it is interpreted as a particular analysis domain.
 #[derive(Debug)]
 struct RawTable {
     plotname: String,
@@ -126,7 +134,7 @@ enum Columns {
     Complex(BTreeMap<String, Vec<Complex64>>),
 }
 
-/// Parse an ASCII ngspice rawfile into a neutral [`RawTable`].
+/// Parse an ASCII ngspice raw file into a neutral [`RawTable`].
 fn parse_table(raw: &str) -> Result<RawTable, NgspiceError> {
     let mut lines = raw.lines();
     let mut plotname = None;
@@ -183,7 +191,7 @@ fn parse_table(raw: &str) -> Result<RawTable, NgspiceError> {
     })
 }
 
-/// Interpret a rawfile as an operating point: one real value per node.
+/// Interpret a raw file as an operating point: one real value per node.
 fn operating_point(table: RawTable) -> Result<OperatingPoint, NgspiceError> {
     expect_plotname(&table, PLOTNAME_OP)?;
     let columns = real_columns(table.columns, "operating point")?;
@@ -200,7 +208,7 @@ fn operating_point(table: RawTable) -> Result<OperatingPoint, NgspiceError> {
     Ok(OperatingPoint::new(voltages))
 }
 
-/// Interpret a rawfile as transient waveforms: a `time` axis plus node series.
+/// Interpret a raw file as transient waveforms: a `time` axis plus node series.
 fn waveforms(table: RawTable) -> Result<Waveforms, NgspiceError> {
     expect_plotname(&table, PLOTNAME_TRAN)?;
     let mut columns = real_columns(table.columns, "transient")?;
@@ -210,7 +218,7 @@ fn waveforms(table: RawTable) -> Result<Waveforms, NgspiceError> {
     Ok(Waveforms::new(time, node_signals(columns)))
 }
 
-/// Interpret a rawfile as an AC sweep: a `frequency` axis plus complex node series.
+/// Interpret a raw file as an AC sweep: a `frequency` axis plus complex node series.
 fn spectra(table: RawTable) -> Result<Spectra, NgspiceError> {
     expect_plotname(&table, PLOTNAME_AC)?;
     let Columns::Complex(mut columns) = table.columns else {
@@ -227,7 +235,7 @@ fn spectra(table: RawTable) -> Result<Spectra, NgspiceError> {
     Ok(Spectra::new(frequency, node_signals(columns)))
 }
 
-/// Error unless the rawfile's plotname is the one this analysis produces.
+/// Error unless the raw file's plotname is the one this analysis produces.
 fn expect_plotname(table: &RawTable, expected: &str) -> Result<(), NgspiceError> {
     if table.plotname == expected {
         Ok(())
@@ -248,7 +256,7 @@ fn real_columns(columns: Columns, what: &str) -> Result<BTreeMap<String, Vec<f64
     }
 }
 
-/// Rekey voltage columns (`v(node)`) by bare node name, dropping non-voltage vars.
+/// Re-key voltage columns (`v(node)`) by bare node name, dropping non-voltage vars.
 fn node_signals<T>(columns: BTreeMap<String, Vec<T>>) -> BTreeMap<String, Vec<T>> {
     columns
         .into_iter()
@@ -396,7 +404,7 @@ Values:
 
     #[test]
     fn rejects_wrong_domain_plotname() {
-        // A transient rawfile handed to the operating-point interpreter.
+        // A transient raw file handed to the operating-point interpreter.
         let err = operating_point(parse_table(TRANSIENT).unwrap()).expect_err("wrong plotname");
         assert!(err.to_string().contains("Operating Point"));
     }

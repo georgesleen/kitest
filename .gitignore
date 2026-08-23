@@ -39,3 +39,6 @@ __pycache__/
 _autosave-*
 *.lck
 fp-info-cache
+
+# Harper-ls
+.harper-dictionary.txt

@@ -1,8 +1,7 @@
-use kitest::{Ac, Backend, Ngspice, Sweep, Tolerance, Tran};
+use kitest::{Ac, AcSupply, Backend, DcSupply, Ngspice, Sweep, Tolerance, Tran};
 
 const DIVIDER: &str = "\
 * voltage divider
-v1 vin 0 dc 5
 r1 vin vout 10k
 r2 vout 0 10k
 ";
@@ -16,15 +15,16 @@ c1 vout 0 1u
 
 const RC_LOWPASS: &str = "\
 * rc low-pass
-v1 vin 0 dc 0 ac 1
 r1 vin vout 1k
 c1 vout 0 1u
 ";
 
 #[test]
 fn op_solves_voltage_divider() {
-    let r = Ngspice::default().run_op(DIVIDER).unwrap();
-    let vout = r.node("vout").expect("v(vout) present");
+    let result = Ngspice::default()
+        .run_op(DIVIDER, &[DcSupply::new("vin", 5.0)])
+        .unwrap();
+    let vout = result.node("vout").expect("v(vout) present");
     assert!((vout - 2.5).abs() < 1e-6, "v(vout) = {vout}");
 }
 
@@ -52,6 +52,7 @@ fn ac_rc_lowpass_cutoff() {
     let r = Ngspice::default()
         .run_ac(
             RC_LOWPASS,
+            &[AcSupply::new("vin").magnitude(1.0).bias(0.0)],
             Ac {
                 sweep: Sweep::Dec,
                 points: 100,
