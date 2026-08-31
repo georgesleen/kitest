@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, path::Path};
 use num_complex::Complex64;
 
 use crate::stimulus::{AcSupply, inject};
-use crate::{Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, Waveforms};
+use crate::{Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Waveforms};
 
 /// Ngspice plotname for each analysis, used to validate a raw file is what we ran.
 const PLOTNAME_OP: &str = "Operating Point";
@@ -41,8 +41,14 @@ impl Backend for Ngspice {
         operating_point(self.run_raw(&deck, "op")?)
     }
 
-    fn run_tran(&self, netlist: &str, params: Tran) -> Result<Waveforms, NgspiceError> {
-        waveforms(self.run_raw(netlist, &tran_command(&params))?)
+    fn run_tran(
+        &self,
+        netlist: &str,
+        sources: &[TranSource],
+        params: Tran,
+    ) -> Result<Waveforms, NgspiceError> {
+        let deck = inject(netlist, sources);
+        waveforms(self.run_raw(&deck, &tran_command(&params))?)
     }
 
     fn run_ac(

@@ -75,6 +75,144 @@ impl Stimulus for AcSupply {
     }
 }
 
+/// Near-ideal edge that still keeps the transient solver converging.
+const IDEAL_EDGE: f64 = 1e-9;
+/// A width and period long enough that a stepped pulse never repeats in a run.
+const ONE_SHOT: f64 = 1e30;
+
+/// A time-varying source for transient analysis, driving `node` with a waveform.
+pub struct TranSource {
+    node: String,
+    waveform: Waveform,
+}
+
+/// The waveform a [`TranSource`] plays. Each variant carries only its own
+/// parameters, so a pulse and a sine can never be confused.
+enum Waveform {
+    Pulse(Pulse),
+    Sin(Sin),
+}
+
+impl TranSource {
+    /// Drive `node` with a pulse waveform.
+    pub fn pulse(node: &str, pulse: Pulse) -> Self {
+        Self {
+            node: node.to_owned(),
+            waveform: Waveform::Pulse(pulse),
+        }
+    }
+
+    /// Drive `node` with a sine waveform.
+    pub fn sin(node: &str, sin: Sin) -> Self {
+        Self {
+            node: node.to_owned(),
+            waveform: Waveform::Sin(sin),
+        }
+    }
+}
+
+impl Stimulus for TranSource {
+    /// Render as a SPICE source line with the given element name.
+    fn spice_line(&self, name: &str) -> String {
+        let spec = match &self.waveform {
+            Waveform::Pulse(pulse) => pulse.spec(),
+            Waveform::Sin(sin) => sin.spec(),
+        };
+        format!("{name} {node} 0 {spec}", node = self.node)
+    }
+}
+
+/// A SPICE `PULSE` waveform. Defaults to a one-shot step; the builder methods
+/// shape it into a repeating pulse.
+pub struct Pulse {
+    from: f64,
+    to: f64,
+    delay: f64,
+    rise: f64,
+    fall: f64,
+    width: f64,
+    period: f64,
+}
+
+impl Pulse {
+    /// A one-shot step from `from` to `to` at t=0 that then holds.
+    pub fn step(from: f64, to: f64) -> Self {
+        Self {
+            from,
+            to,
+            delay: 0.0,
+            rise: IDEAL_EDGE,
+            fall: IDEAL_EDGE,
+            width: ONE_SHOT,
+            period: ONE_SHOT,
+        }
+    }
+
+    /// Set the delay before the first edge.
+    pub fn delay(self, delay: f64) -> Self {
+        Self { delay, ..self }
+    }
+
+    /// Set the rise time.
+    pub fn rise(self, rise: f64) -> Self {
+        Self { rise, ..self }
+    }
+
+    /// Set the fall time.
+    pub fn fall(self, fall: f64) -> Self {
+        Self { fall, ..self }
+    }
+
+    /// Set the high time, making the pulse repeat once `period` is also set.
+    pub fn width(self, width: f64) -> Self {
+        Self { width, ..self }
+    }
+
+    /// Set the repeat period.
+    pub fn period(self, period: f64) -> Self {
+        Self { period, ..self }
+    }
+
+    fn spec(&self) -> String {
+        format!(
+            "PULSE({} {} {} {} {} {} {})",
+            self.from, self.to, self.delay, self.rise, self.fall, self.width, self.period
+        )
+    }
+}
+
+/// A SPICE `SIN` waveform: a sine of `amplitude` about `offset` at `freq`.
+pub struct Sin {
+    offset: f64,
+    amplitude: f64,
+    freq: f64,
+    delay: f64,
+}
+
+impl Sin {
+    /// A sine of `amplitude` about `offset` at `freq` hertz, starting at t=0.
+    pub fn new(offset: f64, amplitude: f64, freq: f64) -> Self {
+        Self {
+            offset,
+            amplitude,
+            freq,
+            delay: 0.0,
+        }
+    }
+
+    /// Set the delay before the sine starts.
+    pub fn delay(self, delay: f64) -> Self {
+        Self { delay, ..self }
+    }
+
+    fn spec(&self) -> String {
+        format!(
+            "SIN({} {} {} {})",
+            self.offset, self.amplitude, self.freq, self.delay
+        )
+    }
+}
+
 pub(crate) fn inject<S: Stimulus>(netlist: &str, sources: &[S]) -> String {
     let mut deck = netlist.to_owned();
     for (index, source) in sources.iter().enumerate() {
@@ -130,5 +268,53 @@ mod tests {
     fn inject_numbers_ac_supplies() {
         let deck = inject("* net", &[AcSupply::new("a"), AcSupply::new("b").bias(1.0)]);
         assert_eq!(deck, "* net\nVkt1 a 0 dc 0 ac 1\nVkt2 b 0 dc 1 ac 1");
+    }
+
+    #[test]
+    fn pulse_step_renders_one_shot() {
+        assert_eq!(
+            TranSource::pulse("vin", Pulse::step(0.0, 1.0)).spice_line("Vkt1"),
+            "Vkt1 vin 0 PULSE(0 1 0 0.000000001 0.000000001 1000000000000000000000000000000 1000000000000000000000000000000)"
+        );
+    }
+
+    #[test]
+    fn pulse_builder_shapes_a_repeating_pulse() {
+        let line = TranSource::pulse(
+            "clk",
+            Pulse::step(0.0, 3.3)
+                .rise(1e-9)
+                .fall(1e-9)
+                .width(5e-7)
+                .period(1e-6),
+        )
+        .spice_line("Vkt1");
+        assert_eq!(
+            line,
+            "Vkt1 clk 0 PULSE(0 3.3 0 0.000000001 0.000000001 0.0000005 0.000001)"
+        );
+    }
+
+    #[test]
+    fn sin_renders_with_default_delay() {
+        assert_eq!(
+            TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3)).spice_line("Vkt1"),
+            "Vkt1 vin 0 SIN(0 1 1000 0)"
+        );
+    }
+
+    #[test]
+    fn inject_numbers_tran_sources() {
+        let deck = inject(
+            "* net",
+            &[
+                TranSource::sin("a", Sin::new(0.0, 1.0, 1e3)),
+                TranSource::sin("b", Sin::new(0.0, 2.0, 1e3)),
+            ],
+        );
+        assert_eq!(
+            deck,
+            "* net\nVkt1 a 0 SIN(0 1 1000 0)\nVkt2 b 0 SIN(0 2 1000 0)"
+        );
     }
 }

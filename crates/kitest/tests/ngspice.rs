@@ -1,4 +1,4 @@
-use kitest::{Ac, AcSupply, Backend, DcSupply, Ngspice, Sweep, Tolerance, Tran};
+use kitest::{Ac, AcSupply, Backend, DcSupply, Ngspice, Pulse, Sweep, Tolerance, Tran, TranSource};
 
 const DIVIDER: &str = "\
 * voltage divider
@@ -8,7 +8,6 @@ r2 vout 0 10k
 
 const RC: &str = "\
 * rc charge
-v1 vin 0 pulse(0 1 0 1n 1n 1 2)
 r1 vin vout 1k
 c1 vout 0 1u
 ";
@@ -33,6 +32,7 @@ fn tran_charges_rc() {
     let r = Ngspice::default()
         .run_tran(
             RC,
+            &[TranSource::pulse("vin", Pulse::step(0.0, 1.0))],
             Tran {
                 step: 1e-5,
                 stop: 5e-3,
