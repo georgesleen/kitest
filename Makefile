@@ -23,9 +23,12 @@ test:
 	cargo test
 	$(MAKE) pytest
 
+# `uv run` auto-syncs before each command, which reinstalls a cached build of
+# the kitest package (cache keyed on the unchanging 0.0.0 version) and clobbers
+# the fresh extension maturin just built. --no-sync keeps maturin's install.
 pytest: venv
-	uv --directory crates/kitest-py run maturin develop
-	uv --directory crates/kitest-py run pytest
+	uv --directory crates/kitest-py run --no-sync maturin develop
+	uv --directory crates/kitest-py run --no-sync pytest
 
 build:
 	cargo build

@@ -9,6 +9,7 @@ pub(crate) trait Stimulus {
 }
 
 /// A DC voltage supply.
+#[derive(Clone)]
 pub struct DcSupply {
     node: String,
     volts: f64,
@@ -36,6 +37,7 @@ impl Stimulus for DcSupply {
 }
 
 /// An AC supply.
+#[derive(Clone)]
 pub struct AcSupply {
     node: String,
     bias: f64,
@@ -81,6 +83,7 @@ const IDEAL_EDGE: f64 = 1e-9;
 const ONE_SHOT: f64 = 1e30;
 
 /// A time-varying source for transient analysis, driving `node` with a waveform.
+#[derive(Clone)]
 pub struct TranSource {
     node: String,
     waveform: Waveform,
@@ -88,6 +91,7 @@ pub struct TranSource {
 
 /// The waveform a [`TranSource`] plays. Each variant carries only its own
 /// parameters, so a pulse and a sine can never be confused.
+#[derive(Clone)]
 enum Waveform {
     Pulse(Pulse),
     Sin(Sin),
@@ -124,6 +128,7 @@ impl Stimulus for TranSource {
 
 /// A SPICE `PULSE` waveform. Defaults to a one-shot step; the builder methods
 /// shape it into a repeating pulse.
+#[derive(Clone)]
 pub struct Pulse {
     from: f64,
     to: f64,
@@ -182,6 +187,7 @@ impl Pulse {
 }
 
 /// A SPICE `SIN` waveform: a sine of `amplitude` about `offset` at `freq`.
+#[derive(Clone)]
 pub struct Sin {
     offset: f64,
     amplitude: f64,

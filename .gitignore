@@ -40,5 +40,7 @@ _autosave-*
 *.lck
 fp-info-cache
 
-# Harper-ls
+# Local dev tooling
 .harper-dictionary.txt
+AGENTS.md
+CLAUDE.md
