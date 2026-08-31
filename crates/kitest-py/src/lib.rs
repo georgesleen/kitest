@@ -1,7 +1,10 @@
+use num_complex::Complex64;
 use pyo3::prelude::*;
 
 use ::kitest::{
-    Backend, DcSupply, Ngspice, OperatingPoint, Tolerance, Voltage,
+    Ac, AcSupply, Backend, DcSupply, Ngspice, OperatingPoint, Pulse, Response,
+    Signal, Sin, Spectra, Sweep, Tolerance, Tran, TranSource, Voltage,
+    Waveforms,
 };
 
 /// Returns the kitest version string.
@@ -102,10 +105,305 @@ impl PyNgspice {
     ) -> PyResult<PyOperatingPoint> {
         let supplies: Vec<DcSupply> =
             supplies.into_iter().map(|s| s.inner).collect();
-        let op = self.inner.run_op(netlist, &supplies).map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-        })?;
+        let op = self.inner.run_op(netlist, &supplies).map_err(sim_error)?;
         Ok(PyOperatingPoint { inner: op })
+    }
+
+    fn run_ac(
+        &self,
+        netlist: &str,
+        supplies: Vec<PyAcSupply>,
+        params: PyAc,
+    ) -> PyResult<PySpectra> {
+        let supplies: Vec<AcSupply> =
+            supplies.into_iter().map(|s| s.inner).collect();
+        let spectra = self
+            .inner
+            .run_ac(netlist, &supplies, params.inner)
+            .map_err(sim_error)?;
+        Ok(PySpectra { inner: spectra })
+    }
+
+    fn run_tran(
+        &self,
+        netlist: &str,
+        sources: Vec<PyTranSource>,
+        params: PyTran,
+    ) -> PyResult<PyWaveforms> {
+        let sources: Vec<TranSource> =
+            sources.into_iter().map(|s| s.inner).collect();
+        let waveforms = self
+            .inner
+            .run_tran(netlist, &sources, params.inner)
+            .map_err(sim_error)?;
+        Ok(PyWaveforms { inner: waveforms })
+    }
+}
+
+fn sim_error(e: impl std::fmt::Display) -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+}
+
+#[pyclass(name = "AcSupply", from_py_object)]
+#[derive(Clone)]
+struct PyAcSupply {
+    inner: AcSupply,
+}
+
+#[pymethods]
+impl PyAcSupply {
+    #[new]
+    fn new(node: &str) -> Self {
+        Self {
+            inner: AcSupply::new(node),
+        }
+    }
+
+    fn bias(&self, bias: f64) -> Self {
+        Self {
+            inner: self.inner.clone().bias(bias),
+        }
+    }
+
+    fn magnitude(&self, magnitude: f64) -> Self {
+        Self {
+            inner: self.inner.clone().magnitude(magnitude),
+        }
+    }
+}
+
+#[pyclass(name = "Pulse", from_py_object)]
+#[derive(Clone)]
+struct PyPulse {
+    inner: Pulse,
+}
+
+#[pymethods]
+impl PyPulse {
+    #[staticmethod]
+    fn step(low: f64, high: f64) -> Self {
+        Self {
+            inner: Pulse::step(low, high),
+        }
+    }
+
+    fn delay(&self, delay: f64) -> Self {
+        Self {
+            inner: self.inner.clone().delay(delay),
+        }
+    }
+
+    fn rise(&self, rise: f64) -> Self {
+        Self {
+            inner: self.inner.clone().rise(rise),
+        }
+    }
+
+    fn fall(&self, fall: f64) -> Self {
+        Self {
+            inner: self.inner.clone().fall(fall),
+        }
+    }
+
+    fn width(&self, width: f64) -> Self {
+        Self {
+            inner: self.inner.clone().width(width),
+        }
+    }
+
+    fn period(&self, period: f64) -> Self {
+        Self {
+            inner: self.inner.clone().period(period),
+        }
+    }
+}
+
+#[pyclass(name = "Sin", from_py_object)]
+#[derive(Clone)]
+struct PySin {
+    inner: Sin,
+}
+
+#[pymethods]
+impl PySin {
+    #[new]
+    fn new(offset: f64, amplitude: f64, freq: f64) -> Self {
+        Self {
+            inner: Sin::new(offset, amplitude, freq),
+        }
+    }
+
+    fn delay(&self, delay: f64) -> Self {
+        Self {
+            inner: self.inner.clone().delay(delay),
+        }
+    }
+}
+
+#[pyclass(name = "TranSource", from_py_object)]
+#[derive(Clone)]
+struct PyTranSource {
+    inner: TranSource,
+}
+
+#[pymethods]
+impl PyTranSource {
+    #[staticmethod]
+    fn pulse(node: &str, pulse: PyPulse) -> Self {
+        Self {
+            inner: TranSource::pulse(node, pulse.inner),
+        }
+    }
+
+    #[staticmethod]
+    fn sin(node: &str, sin: PySin) -> Self {
+        Self {
+            inner: TranSource::sin(node, sin.inner),
+        }
+    }
+}
+
+#[pyclass(name = "Sweep", eq, eq_int, from_py_object)]
+#[derive(Clone, PartialEq)]
+enum PySweep {
+    Dec,
+    Oct,
+    Lin,
+}
+
+impl PySweep {
+    fn to_kitest(&self) -> Sweep {
+        match self {
+            PySweep::Dec => Sweep::Dec,
+            PySweep::Oct => Sweep::Oct,
+            PySweep::Lin => Sweep::Lin,
+        }
+    }
+}
+
+#[pyclass(name = "Ac", from_py_object)]
+#[derive(Clone)]
+struct PyAc {
+    inner: Ac,
+}
+
+#[pymethods]
+impl PyAc {
+    #[new]
+    fn new(sweep: PySweep, points: u32, fstart: f64, fstop: f64) -> Self {
+        Self {
+            inner: Ac {
+                sweep: sweep.to_kitest(),
+                points,
+                fstart,
+                fstop,
+            },
+        }
+    }
+}
+
+#[pyclass(name = "Tran", from_py_object)]
+#[derive(Clone)]
+struct PyTran {
+    inner: Tran,
+}
+
+#[pymethods]
+impl PyTran {
+    #[new]
+    fn new(step: f64, stop: f64) -> Self {
+        Self {
+            inner: Tran { step, stop },
+        }
+    }
+}
+
+#[pyclass(name = "Signal")]
+struct PySignal {
+    time: Vec<f64>,
+    values: Vec<f64>,
+}
+
+#[pymethods]
+impl PySignal {
+    fn time(&self) -> Vec<f64> {
+        self.time.clone()
+    }
+
+    fn values(&self) -> Vec<f64> {
+        self.values.clone()
+    }
+
+    fn settles_to(
+        &self,
+        target: f64,
+        tolerance: PyTolerance,
+        window: f64,
+    ) -> bool {
+        Signal::new(&self.time, &self.values).settles_to(
+            target,
+            tolerance.inner,
+            window,
+        )
+    }
+
+    fn overshoot(&self, target: f64) -> f64 {
+        Signal::new(&self.time, &self.values).overshoot(target)
+    }
+}
+
+#[pyclass(name = "Response")]
+struct PyResponse {
+    frequency: Vec<f64>,
+    values: Vec<Complex64>,
+}
+
+#[pymethods]
+impl PyResponse {
+    fn frequency(&self) -> Vec<f64> {
+        self.frequency.clone()
+    }
+
+    fn values(&self) -> Vec<Complex64> {
+        self.values.clone()
+    }
+
+    fn gain_db_at(&self, frequency: f64) -> Option<f64> {
+        Response::new(&self.frequency, &self.values).gain_db_at(frequency)
+    }
+
+    fn phase_deg_at(&self, frequency: f64) -> Option<f64> {
+        Response::new(&self.frequency, &self.values).phase_deg_at(frequency)
+    }
+}
+
+#[pyclass(name = "Waveforms")]
+struct PyWaveforms {
+    inner: Waveforms,
+}
+
+#[pymethods]
+impl PyWaveforms {
+    fn node(&self, node: &str) -> Option<PySignal> {
+        self.inner.node(node).map(|s| PySignal {
+            time: s.time().to_vec(),
+            values: s.values().to_vec(),
+        })
+    }
+}
+
+#[pyclass(name = "Spectra")]
+struct PySpectra {
+    inner: Spectra,
+}
+
+#[pymethods]
+impl PySpectra {
+    fn node(&self, node: &str) -> Option<PyResponse> {
+        self.inner.node(node).map(|r| PyResponse {
+            frequency: r.frequency().to_vec(),
+            values: r.values().to_vec(),
+        })
     }
 }
 
@@ -114,9 +412,20 @@ impl PyNgspice {
 fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_class::<PyDcSupply>()?;
+    m.add_class::<PyAcSupply>()?;
+    m.add_class::<PyTranSource>()?;
+    m.add_class::<PyPulse>()?;
+    m.add_class::<PySin>()?;
+    m.add_class::<PySweep>()?;
+    m.add_class::<PyAc>()?;
+    m.add_class::<PyTran>()?;
     m.add_class::<PyNgspice>()?;
     m.add_class::<PyOperatingPoint>()?;
+    m.add_class::<PyWaveforms>()?;
+    m.add_class::<PySpectra>()?;
     m.add_class::<PyVoltage>()?;
+    m.add_class::<PySignal>()?;
+    m.add_class::<PyResponse>()?;
     m.add_class::<PyTolerance>()?;
     Ok(())
 }

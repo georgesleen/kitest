@@ -9,7 +9,7 @@ pub struct Signal<'a> {
 }
 
 impl<'a> Signal<'a> {
-    pub(crate) fn new(time: &'a [f64], values: &'a [f64]) -> Self {
+    pub fn new(time: &'a [f64], values: &'a [f64]) -> Self {
         Self { time, values }
     }
 
@@ -65,7 +65,7 @@ impl<'a> Response<'a> {
     /// Decibels per decade of amplitude ratio.
     const DB_PER_DECADE: f64 = 20.0;
 
-    pub(crate) fn new(frequency: &'a [f64], values: &'a [Complex64]) -> Self {
+    pub fn new(frequency: &'a [f64], values: &'a [Complex64]) -> Self {
         Self { frequency, values }
     }
 
