@@ -50,12 +50,16 @@ impl PyNgspice {
         }
     }
 
-    fn run_op(&self, netlist: &str, supplies: Vec<PyDcSupply>) -> PyResult<PyOperatingPoint> {
-        let supplies: Vec<DcSupply> = supplies.into_iter().map(|s| s.inner).collect();
-        let op = self
-            .inner
-            .run_op(netlist, &supplies)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    fn run_op(
+        &self,
+        netlist: &str,
+        supplies: Vec<PyDcSupply>,
+    ) -> PyResult<PyOperatingPoint> {
+        let supplies: Vec<DcSupply> =
+            supplies.into_iter().map(|s| s.inner).collect();
+        let op = self.inner.run_op(netlist, &supplies).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+        })?;
         Ok(PyOperatingPoint { inner: op })
     }
 }

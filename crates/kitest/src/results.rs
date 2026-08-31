@@ -33,7 +33,10 @@ pub struct Waveforms {
 }
 
 impl Waveforms {
-    pub(crate) fn new(time: Vec<f64>, signals: BTreeMap<String, Vec<f64>>) -> Self {
+    pub(crate) fn new(
+        time: Vec<f64>,
+        signals: BTreeMap<String, Vec<f64>>,
+    ) -> Self {
         Self { time, signals }
     }
 
@@ -54,7 +57,10 @@ pub struct Spectra {
 }
 
 impl Spectra {
-    pub(crate) fn new(frequency: Vec<f64>, signals: BTreeMap<String, Vec<Complex64>>) -> Self {
+    pub(crate) fn new(
+        frequency: Vec<f64>,
+        signals: BTreeMap<String, Vec<Complex64>>,
+    ) -> Self {
         Self { frequency, signals }
     }
 

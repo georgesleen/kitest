@@ -1,4 +1,7 @@
-use kitest::{Ac, AcSupply, Backend, DcSupply, Ngspice, Pulse, Sweep, Tolerance, Tran, TranSource};
+use kitest::{
+    Ac, AcSupply, Backend, DcSupply, Ngspice, Pulse, Sweep, Tolerance, Tran,
+    TranSource,
+};
 
 const DIVIDER: &str = "\
 * voltage divider

@@ -24,9 +24,15 @@ impl<'a> Signal<'a> {
     }
 
     /// True if signal stays within `tolerance` of `target` over the last `window` seconds.
-    pub fn settles_to(&self, target: f64, tolerance: Tolerance, window: f64) -> bool {
+    pub fn settles_to(
+        &self,
+        target: f64,
+        tolerance: Tolerance,
+        window: f64,
+    ) -> bool {
         let band = tolerance.band(target);
-        let (Some(&first), Some(&last)) = (self.time.first(), self.time.last()) else {
+        let (Some(&first), Some(&last)) = (self.time.first(), self.time.last())
+        else {
             return false;
         };
         if last - first < window {

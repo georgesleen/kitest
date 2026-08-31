@@ -10,7 +10,9 @@ use std::{collections::BTreeMap, path::Path};
 use num_complex::Complex64;
 
 use crate::stimulus::{AcSupply, inject};
-use crate::{Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Waveforms};
+use crate::{
+    Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Waveforms,
+};
 
 /// Ngspice plotname for each analysis, used to validate a raw file is what we ran.
 const PLOTNAME_OP: &str = "Operating Point";
@@ -36,7 +38,11 @@ impl Default for Ngspice {
 impl Backend for Ngspice {
     type Error = NgspiceError;
 
-    fn run_op(&self, netlist: &str, supplies: &[DcSupply]) -> Result<OperatingPoint, NgspiceError> {
+    fn run_op(
+        &self,
+        netlist: &str,
+        supplies: &[DcSupply],
+    ) -> Result<OperatingPoint, NgspiceError> {
         let deck = inject(netlist, supplies);
         operating_point(self.run_raw(&deck, "op")?)
     }
@@ -64,7 +70,11 @@ impl Backend for Ngspice {
 
 impl Ngspice {
     /// Run one `.control` directive and parse the raw file it writes.
-    fn run_raw(&self, netlist: &str, directive: &str) -> Result<RawTable, NgspiceError> {
+    fn run_raw(
+        &self,
+        netlist: &str,
+        directive: &str,
+    ) -> Result<RawTable, NgspiceError> {
         let dir = tempfile::tempdir().map_err(NgspiceError::Io)?;
         let deck_path = dir.path().join("deck.cir");
         let raw_path = dir.path().join("out.raw");
@@ -85,7 +95,8 @@ impl Ngspice {
             });
         }
 
-        let raw = std::fs::read_to_string(&raw_path).map_err(NgspiceError::Io)?;
+        let raw =
+            std::fs::read_to_string(&raw_path).map_err(NgspiceError::Io)?;
         parse_table(&raw)
     }
 }
@@ -164,16 +175,18 @@ fn parse_table(raw: &str) -> Result<RawTable, NgspiceError> {
         }
     }
 
-    let plotname = plotname.ok_or_else(|| NgspiceError::Parse("missing Plotname".into()))?;
-    let n_vars = n_vars.ok_or_else(|| NgspiceError::Parse("missing No. Variables".into()))?;
-    let n_points = n_points.ok_or_else(|| NgspiceError::Parse("missing No. Points".into()))?;
+    let plotname = plotname
+        .ok_or_else(|| NgspiceError::Parse("missing Plotname".into()))?;
+    let n_vars = n_vars
+        .ok_or_else(|| NgspiceError::Parse("missing No. Variables".into()))?;
+    let n_points = n_points
+        .ok_or_else(|| NgspiceError::Parse("missing No. Points".into()))?;
 
     let mut names = Vec::with_capacity(n_vars);
     for line in lines.by_ref().take(n_vars) {
-        let name = line
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| NgspiceError::Parse(format!("malformed variable line: {line:?}")))?;
+        let name = line.split_whitespace().nth(1).ok_or_else(|| {
+            NgspiceError::Parse(format!("malformed variable line: {line:?}"))
+        })?;
         names.push(name.to_owned());
     }
 
@@ -209,7 +222,9 @@ fn operating_point(table: RawTable) -> Result<OperatingPoint, NgspiceError> {
     }
     let voltages = columns
         .into_iter()
-        .filter_map(|(var, series)| Some((node_name(&var)?.to_owned(), series[0])))
+        .filter_map(|(var, series)| {
+            Some((node_name(&var)?.to_owned(), series[0]))
+        })
         .collect();
     Ok(OperatingPoint::new(voltages))
 }
@@ -218,9 +233,9 @@ fn operating_point(table: RawTable) -> Result<OperatingPoint, NgspiceError> {
 fn waveforms(table: RawTable) -> Result<Waveforms, NgspiceError> {
     expect_plotname(&table, PLOTNAME_TRAN)?;
     let mut columns = real_columns(table.columns, "transient")?;
-    let time = columns
-        .remove(AXIS_TIME)
-        .ok_or_else(|| NgspiceError::Parse("transient result missing time axis".into()))?;
+    let time = columns.remove(AXIS_TIME).ok_or_else(|| {
+        NgspiceError::Parse("transient result missing time axis".into())
+    })?;
     Ok(Waveforms::new(time, node_signals(columns)))
 }
 
@@ -234,7 +249,9 @@ fn spectra(table: RawTable) -> Result<Spectra, NgspiceError> {
     };
     let frequency = columns
         .remove(AXIS_FREQUENCY)
-        .ok_or_else(|| NgspiceError::Parse("AC result missing frequency axis".into()))?
+        .ok_or_else(|| {
+            NgspiceError::Parse("AC result missing frequency axis".into())
+        })?
         .into_iter()
         .map(|c| c.re)
         .collect();
@@ -242,7 +259,10 @@ fn spectra(table: RawTable) -> Result<Spectra, NgspiceError> {
 }
 
 /// Error unless the raw file's plotname is the one this analysis produces.
-fn expect_plotname(table: &RawTable, expected: &str) -> Result<(), NgspiceError> {
+fn expect_plotname(
+    table: &RawTable,
+    expected: &str,
+) -> Result<(), NgspiceError> {
     if table.plotname == expected {
         Ok(())
     } else {
@@ -253,7 +273,10 @@ fn expect_plotname(table: &RawTable, expected: &str) -> Result<(), NgspiceError>
     }
 }
 
-fn real_columns(columns: Columns, what: &str) -> Result<BTreeMap<String, Vec<f64>>, NgspiceError> {
+fn real_columns(
+    columns: Columns,
+    what: &str,
+) -> Result<BTreeMap<String, Vec<f64>>, NgspiceError> {
     match columns {
         Columns::Real(m) => Ok(m),
         Columns::Complex(_) => Err(NgspiceError::Parse(format!(
@@ -263,7 +286,9 @@ fn real_columns(columns: Columns, what: &str) -> Result<BTreeMap<String, Vec<f64
 }
 
 /// Re-key voltage columns (`v(node)`) by bare node name, dropping non-voltage vars.
-fn node_signals<T>(columns: BTreeMap<String, Vec<T>>) -> BTreeMap<String, Vec<T>> {
+fn node_signals<T>(
+    columns: BTreeMap<String, Vec<T>>,
+) -> BTreeMap<String, Vec<T>> {
     columns
         .into_iter()
         .filter_map(|(var, series)| Some((node_name(&var)?.to_owned(), series)))
@@ -370,7 +395,8 @@ Values:
 ";
 
     fn fixture(name: &str) -> String {
-        let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+        let path =
+            format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_to_string(path).unwrap()
     }
 
@@ -385,7 +411,8 @@ Values:
 
     #[test]
     fn parses_op_point() {
-        let table = parse_table(&fixture("voltage-divider/divider.raw")).unwrap();
+        let table =
+            parse_table(&fixture("voltage-divider/divider.raw")).unwrap();
         let op = operating_point(table).unwrap();
         assert!(op.node("vin").unwrap().near(5.0, PARSE_EPS));
         assert!(op.node("vout").unwrap().near(2.5, PARSE_EPS));
@@ -411,7 +438,8 @@ Values:
     #[test]
     fn rejects_wrong_domain_plotname() {
         // A transient raw file handed to the operating-point interpreter.
-        let err = operating_point(parse_table(TRANSIENT).unwrap()).expect_err("wrong plotname");
+        let err = operating_point(parse_table(TRANSIENT).unwrap())
+            .expect_err("wrong plotname");
         assert!(err.to_string().contains("Operating Point"));
     }
 
@@ -427,7 +455,8 @@ Variables:
 Values:
  0 1.0
 ";
-        let err = waveforms(parse_table(raw).unwrap()).expect_err("missing time axis");
+        let err = waveforms(parse_table(raw).unwrap())
+            .expect_err("missing time axis");
         assert!(err.to_string().contains("time axis"));
     }
 
@@ -485,7 +514,8 @@ Values:
 
     #[test]
     fn build_deck_wraps_netlist() {
-        let deck = build_deck("* t\nv1 a 0 dc 1\n", "op", Path::new("/tmp/out.raw"));
+        let deck =
+            build_deck("* t\nv1 a 0 dc 1\n", "op", Path::new("/tmp/out.raw"));
         assert!(deck.contains("* t\nv1 a 0 dc 1\n"));
         assert!(deck.contains("\nop\n"));
         assert!(deck.contains("\nset filetype=ascii\n"));

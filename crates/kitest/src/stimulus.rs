@@ -181,7 +181,13 @@ impl Pulse {
     fn spec(&self) -> String {
         format!(
             "PULSE({} {} {} {} {} {} {})",
-            self.from, self.to, self.delay, self.rise, self.fall, self.width, self.period
+            self.from,
+            self.to,
+            self.delay,
+            self.rise,
+            self.fall,
+            self.width,
+            self.period
         )
     }
 }
@@ -223,7 +229,9 @@ pub(crate) fn inject<S: Stimulus>(netlist: &str, sources: &[S]) -> String {
     let mut deck = netlist.to_owned();
     for (index, source) in sources.iter().enumerate() {
         deck.push('\n');
-        deck.push_str(&source.spice_line(&format!("{SUPPLY_PREFIX}{}", index + 1)));
+        deck.push_str(
+            &source.spice_line(&format!("{SUPPLY_PREFIX}{}", index + 1)),
+        );
     }
     deck
 }
@@ -242,7 +250,10 @@ mod tests {
 
     #[test]
     fn numbers_multiple_supplies() {
-        let deck = inject("* net", &[DcSupply::new("a", 5.0), DcSupply::new("b", 3.3)]);
+        let deck = inject(
+            "* net",
+            &[DcSupply::new("a", 5.0), DcSupply::new("b", 3.3)],
+        );
         assert_eq!(deck, "* net\nVkt1 a 0 5\nVkt2 b 0 3.3");
     }
 
@@ -272,7 +283,10 @@ mod tests {
 
     #[test]
     fn inject_numbers_ac_supplies() {
-        let deck = inject("* net", &[AcSupply::new("a"), AcSupply::new("b").bias(1.0)]);
+        let deck = inject(
+            "* net",
+            &[AcSupply::new("a"), AcSupply::new("b").bias(1.0)],
+        );
         assert_eq!(deck, "* net\nVkt1 a 0 dc 0 ac 1\nVkt2 b 0 dc 1 ac 1");
     }
 
