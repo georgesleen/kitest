@@ -1,6 +1,6 @@
 //! The walking skeleton: a KiCad design driven through the full pipeline.
 
-use kitest::{Backend, DcSupply, Ngspice, export_netlist};
+use kitest::{Backend, DcSupply, Ngspice, Tolerance, export_netlist};
 use std::path::Path;
 
 const DIVIDER_SCH: &str = concat!(
@@ -17,5 +17,5 @@ fn divider_op_from_kicad() {
         .unwrap();
     let out = result.node("/out").expect("/out present");
 
-    assert!((out - 2.5).abs() < 1e-6, "out = {out}");
+    assert!(out.near(2.5, Tolerance::abs(1e-6)), "out = {}", out.volts());
 }

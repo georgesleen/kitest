@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use num_complex::Complex64;
 
-use crate::{Response, Signal};
+use crate::{Response, Signal, signal::Voltage};
 
 /// DC operating-point voltages, one value per node.
 #[derive(Debug)]
@@ -18,8 +18,10 @@ impl OperatingPoint {
     }
 
     /// DC voltage at `node`, or `None` if that node is absent.
-    pub fn node(&self, node: &str) -> Option<f64> {
-        self.voltages.get(&node.to_lowercase()).copied()
+    pub fn node(&self, node: &str) -> Option<Voltage> {
+        Some(Voltage::new(
+            self.voltages.get(&node.to_lowercase()).copied()?,
+        ))
     }
 }
 

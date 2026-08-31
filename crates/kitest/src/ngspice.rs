@@ -333,9 +333,9 @@ fn reshape<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Sweep;
+    use crate::{Sweep, Tolerance};
 
-    const PARSE_EPS: f64 = 1e-12;
+    const PARSE_EPS: Tolerance = Tolerance::Abs(1e-12);
 
     const TRANSIENT: &str = "\
 Title: synthetic
@@ -387,8 +387,8 @@ Values:
     fn parses_op_point() {
         let table = parse_table(&fixture("voltage-divider/divider.raw")).unwrap();
         let op = operating_point(table).unwrap();
-        assert!((op.node("vin").unwrap() - 5.0).abs() < PARSE_EPS);
-        assert!((op.node("vout").unwrap() - 2.5).abs() < PARSE_EPS);
+        assert!(op.node("vin").unwrap().near(5.0, PARSE_EPS));
+        assert!(op.node("vout").unwrap().near(2.5, PARSE_EPS));
         assert!(op.node("nope").is_none());
     }
 
@@ -404,7 +404,7 @@ Values:
     fn parses_complex_ac() {
         let spectra = spectra(parse_table(AC).unwrap()).unwrap();
         let out = spectra.node("out").expect("response present");
-        assert_eq!(out.freq(), &[1.0, 10.0]);
+        assert_eq!(out.frequency(), &[1.0, 10.0]);
         assert_eq!(out.values()[0], Complex64::new(0.6, -0.8));
     }
 

@@ -13,5 +13,5 @@ pub use backend::Backend;
 pub use kicad::{KicadError, export_netlist};
 pub use ngspice::{Ngspice, NgspiceError};
 pub use results::{OperatingPoint, Spectra, Waveforms};
-pub use signal::{Response, Signal, Tolerance};
+pub use signal::{Response, Signal, Tolerance, Voltage};
 pub use stimulus::{AcSupply, DcSupply, Pulse, Sin, TranSource};

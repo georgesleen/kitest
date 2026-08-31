@@ -24,7 +24,11 @@ fn op_solves_voltage_divider() {
         .run_op(DIVIDER, &[DcSupply::new("vin", 5.0)])
         .unwrap();
     let vout = result.node("vout").expect("v(vout) present");
-    assert!((vout - 2.5).abs() < 1e-6, "v(vout) = {vout}");
+    assert!(
+        vout.near(2.5, Tolerance::abs(1e-6)),
+        "v(out) = {}",
+        vout.volts()
+    );
 }
 
 #[test]

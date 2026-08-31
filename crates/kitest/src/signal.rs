@@ -23,9 +23,9 @@ impl<'a> Signal<'a> {
         self.values
     }
 
-    /// True if signal stays within `tol` of `target` over the last `window` seconds.
-    pub fn settles_to(&self, target: f64, tol: Tolerance, window: f64) -> bool {
-        let band = tol.band(target);
+    /// True if signal stays within `tolerance` of `target` over the last `window` seconds.
+    pub fn settles_to(&self, target: f64, tolerance: Tolerance, window: f64) -> bool {
+        let band = tolerance.band(target);
         let (Some(&first), Some(&last)) = (self.time.first(), self.time.last()) else {
             return false;
         };
@@ -51,7 +51,7 @@ impl<'a> Signal<'a> {
 
 /// A frequency-domain response: complex values over a (real) frequency axis.
 pub struct Response<'a> {
-    freq: &'a [f64],
+    frequency: &'a [f64],
     values: &'a [Complex64],
 }
 
@@ -59,13 +59,13 @@ impl<'a> Response<'a> {
     /// Decibels per decade of amplitude ratio.
     const DB_PER_DECADE: f64 = 20.0;
 
-    pub(crate) fn new(freq: &'a [f64], values: &'a [Complex64]) -> Self {
-        Self { freq, values }
+    pub(crate) fn new(frequency: &'a [f64], values: &'a [Complex64]) -> Self {
+        Self { frequency, values }
     }
 
     /// The frequency axis, in Hz.
-    pub fn freq(&self) -> &[f64] {
-        self.freq
+    pub fn frequency(&self) -> &[f64] {
+        self.frequency
     }
 
     /// The complex response values.
@@ -73,25 +73,47 @@ impl<'a> Response<'a> {
         self.values
     }
 
-    /// Index of the sweep point whose frequency is nearest `f` Hz.
-    fn nearest(&self, f: f64) -> Option<usize> {
-        (0..self.freq.len()).min_by(|&a, &b| {
-            (self.freq[a] - f)
+    /// Index of the sweep point whose frequency is nearest `frequency` Hz.
+    fn nearest(&self, frequency: f64) -> Option<usize> {
+        (0..self.frequency.len()).min_by(|&a, &b| {
+            (self.frequency[a] - frequency)
                 .abs()
-                .total_cmp(&(self.freq[b] - f).abs())
+                .total_cmp(&(self.frequency[b] - frequency).abs())
         })
     }
 
-    /// Gain in dB at the sweep point nearest `f`.
-    pub fn gain_db_at(&self, f: f64) -> Option<f64> {
-        let i = self.nearest(f)?;
+    /// Gain in dB at the sweep point nearest `frequency`.
+    pub fn gain_db_at(&self, frequency: f64) -> Option<f64> {
+        let i = self.nearest(frequency)?;
         Some(Self::DB_PER_DECADE * self.values[i].norm().log10())
     }
 
-    /// Phase in degrees at the sweep point nearest `f`.
-    pub fn phase_deg_at(&self, f: f64) -> Option<f64> {
-        let i = self.nearest(f)?;
+    /// Phase in degrees at the sweep point nearest `frequency`.
+    pub fn phase_deg_at(&self, frequency: f64) -> Option<f64> {
+        let i = self.nearest(frequency)?;
         Some(self.values[i].arg().to_degrees())
+    }
+}
+
+/// Single value associated with a node at an operating point.
+#[derive(Debug, Clone, Copy)]
+pub struct Voltage {
+    volts: f64,
+}
+
+impl Voltage {
+    pub(crate) fn new(volts: f64) -> Self {
+        Self { volts }
+    }
+
+    /// Return the value of the Voltage at a node.
+    pub fn volts(&self) -> f64 {
+        self.volts
+    }
+
+    /// Checks that the voltage at a node is within the specified tolerance
+    pub fn near(&self, expected: f64, tolerance: Tolerance) -> bool {
+        (self.volts - expected).abs() <= tolerance.band(expected)
     }
 }
 
@@ -115,6 +137,7 @@ impl Tolerance {
         Self::Pct(p)
     }
 
+    /// The allowed distance from `target`: absolute as-is, percent of `|target|`.
     fn band(self, target: f64) -> f64 {
         match self {
             Self::Abs(v) => v,
@@ -192,5 +215,29 @@ mod tests {
     fn response_empty_is_none() {
         let r = Response::new(&[], &[]);
         assert!(r.gain_db_at(1.0).is_none());
+    }
+
+    #[test]
+    fn near_accepts_value_inside_absolute_band() {
+        let v = Voltage::new(2.49);
+        assert!(v.near(2.5, Tolerance::abs(0.05)));
+    }
+
+    #[test]
+    fn near_rejects_value_outside_absolute_band() {
+        let v = Voltage::new(2.4);
+        assert!(!v.near(2.5, Tolerance::abs(0.05)));
+    }
+
+    #[test]
+    fn near_uses_percent_of_target() {
+        // 1% of 5.0 is a 0.05 band around the target.
+        assert!(Voltage::new(4.96).near(5.0, Tolerance::pct(1.0)));
+        assert!(!Voltage::new(4.9).near(5.0, Tolerance::pct(1.0)));
+    }
+
+    #[test]
+    fn volts_returns_raw_value() {
+        assert_eq!(Voltage::new(3.3).volts(), 3.3);
     }
 }
