@@ -23,6 +23,8 @@ target
 __pycache__/
 *.pyc
 .pytest_cache/
+# Compiled extension maturin drops into the source tree on editable install
+*.so
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

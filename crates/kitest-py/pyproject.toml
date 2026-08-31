@@ -11,4 +11,5 @@ requires-python = ">=3.9"
 dev = ["pytest", "maturin"]
 
 [tool.maturin]
-module-name = "kitest"
+module-name = "kitest._kitest"
+python-source = "python"
