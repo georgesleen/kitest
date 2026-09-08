@@ -13,6 +13,12 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Export a KiCad schematic to a SPICE netlist body.
+#[pyfunction]
+fn export_netlist(sch: &str) -> PyResult<String> {
+    ::kitest::export_netlist(std::path::Path::new(sch)).map_err(runtime_error)
+}
+
 #[pyclass(name = "DcSupply", from_py_object)]
 #[derive(Clone)]
 struct PyDcSupply {
@@ -105,7 +111,10 @@ impl PyNgspice {
     ) -> PyResult<PyOperatingPoint> {
         let supplies: Vec<DcSupply> =
             supplies.into_iter().map(|s| s.inner).collect();
-        let op = self.inner.run_op(netlist, &supplies).map_err(sim_error)?;
+        let op = self
+            .inner
+            .run_op(netlist, &supplies)
+            .map_err(runtime_error)?;
         Ok(PyOperatingPoint { inner: op })
     }
 
@@ -120,7 +129,7 @@ impl PyNgspice {
         let spectra = self
             .inner
             .run_ac(netlist, &supplies, params.inner)
-            .map_err(sim_error)?;
+            .map_err(runtime_error)?;
         Ok(PySpectra { inner: spectra })
     }
 
@@ -135,12 +144,12 @@ impl PyNgspice {
         let waveforms = self
             .inner
             .run_tran(netlist, &sources, params.inner)
-            .map_err(sim_error)?;
+            .map_err(runtime_error)?;
         Ok(PyWaveforms { inner: waveforms })
     }
 }
 
-fn sim_error(e: impl std::fmt::Display) -> PyErr {
+fn runtime_error(e: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
 }
 
@@ -411,6 +420,7 @@ impl PySpectra {
 #[pymodule]
 fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
+    m.add_function(wrap_pyfunction!(export_netlist, m)?)?;
     m.add_class::<PyDcSupply>()?;
     m.add_class::<PyAcSupply>()?;
     m.add_class::<PyTranSource>()?;
