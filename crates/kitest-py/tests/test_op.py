@@ -12,7 +12,8 @@ def test_run_op_solves_divider():
     assert op.node("vout").volts() == pytest.approx(2.5, abs=1e-6)
 
 
-def test_missing_node_is_none():
+def test_missing_node_raises():
     ng = kitest.Ngspice()
     op = ng.run_op(DIVIDER, [kitest.DcSupply("vin", 5.0)])
-    assert op.node("nope") is None
+    with pytest.raises(KeyError, match="known: .*vout"):
+        op.node("nope")

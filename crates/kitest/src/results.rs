@@ -23,6 +23,11 @@ impl OperatingPoint {
             self.voltages.get(&node.to_lowercase()).copied()?,
         ))
     }
+
+    /// The node names present in the result.
+    pub fn nodes(&self) -> Vec<&str> {
+        self.voltages.keys().map(String::as_str).collect()
+    }
 }
 
 /// Time-domain waveforms from a transient analysis.
@@ -47,6 +52,11 @@ impl Waveforms {
             self.signals.get(&node.to_lowercase())?,
         ))
     }
+
+    /// The node names present in the result.
+    pub fn nodes(&self) -> Vec<&str> {
+        self.signals.keys().map(String::as_str).collect()
+    }
 }
 
 /// Frequency-domain responses from an AC analysis.
@@ -70,5 +80,10 @@ impl Spectra {
             &self.frequency,
             self.signals.get(&node.to_lowercase())?,
         ))
+    }
+
+    /// The node names present in the result.
+    pub fn nodes(&self) -> Vec<&str> {
+        self.signals.keys().map(String::as_str).collect()
     }
 }

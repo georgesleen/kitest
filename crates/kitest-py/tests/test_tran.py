@@ -11,6 +11,5 @@ def test_run_tran_charges_rc():
         kitest.Tran(1e-5, 5e-3),
     )
     vout = wf.node("vout")
-    assert vout is not None
     assert vout.settles_to(0.993, kitest.Tolerance.abs(0.02), 1e-3)
     assert vout.overshoot(1.0) < 0.01

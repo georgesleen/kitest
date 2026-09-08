@@ -85,8 +85,15 @@ struct PyOperatingPoint {
 
 #[pymethods]
 impl PyOperatingPoint {
-    fn node(&self, node: &str) -> Option<PyVoltage> {
-        self.inner.node(node).map(|v| PyVoltage { inner: v })
+    fn node(&self, node: &str) -> PyResult<PyVoltage> {
+        self.inner
+            .node(node)
+            .map(|v| PyVoltage { inner: v })
+            .ok_or_else(|| missing_node(node, &self.inner.nodes()))
+    }
+
+    fn nodes(&self) -> Vec<String> {
+        self.inner.nodes().into_iter().map(String::from).collect()
     }
 }
 
@@ -151,6 +158,17 @@ impl PyNgspice {
 
 fn runtime_error(e: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+}
+
+fn missing_node(node: &str, known: &[&str]) -> PyErr {
+    pyo3::exceptions::PyKeyError::new_err(format!(
+        "no node {node:?}; known: {}",
+        known.join(", ")
+    ))
+}
+
+fn empty_response() -> PyErr {
+    pyo3::exceptions::PyValueError::new_err("response has no frequency points")
 }
 
 #[pyclass(name = "AcSupply", from_py_object)]
@@ -377,12 +395,16 @@ impl PyResponse {
         self.values.clone()
     }
 
-    fn gain_db_at(&self, frequency: f64) -> Option<f64> {
-        Response::new(&self.frequency, &self.values).gain_db_at(frequency)
+    fn gain_db_at(&self, frequency: f64) -> PyResult<f64> {
+        Response::new(&self.frequency, &self.values)
+            .gain_db_at(frequency)
+            .ok_or_else(empty_response)
     }
 
-    fn phase_deg_at(&self, frequency: f64) -> Option<f64> {
-        Response::new(&self.frequency, &self.values).phase_deg_at(frequency)
+    fn phase_deg_at(&self, frequency: f64) -> PyResult<f64> {
+        Response::new(&self.frequency, &self.values)
+            .phase_deg_at(frequency)
+            .ok_or_else(empty_response)
     }
 }
 
@@ -393,11 +415,18 @@ struct PyWaveforms {
 
 #[pymethods]
 impl PyWaveforms {
-    fn node(&self, node: &str) -> Option<PySignal> {
-        self.inner.node(node).map(|s| PySignal {
-            time: s.time().to_vec(),
-            values: s.values().to_vec(),
-        })
+    fn node(&self, node: &str) -> PyResult<PySignal> {
+        self.inner
+            .node(node)
+            .map(|s| PySignal {
+                time: s.time().to_vec(),
+                values: s.values().to_vec(),
+            })
+            .ok_or_else(|| missing_node(node, &self.inner.nodes()))
+    }
+
+    fn nodes(&self) -> Vec<String> {
+        self.inner.nodes().into_iter().map(String::from).collect()
     }
 }
 
@@ -408,11 +437,18 @@ struct PySpectra {
 
 #[pymethods]
 impl PySpectra {
-    fn node(&self, node: &str) -> Option<PyResponse> {
-        self.inner.node(node).map(|r| PyResponse {
-            frequency: r.frequency().to_vec(),
-            values: r.values().to_vec(),
-        })
+    fn node(&self, node: &str) -> PyResult<PyResponse> {
+        self.inner
+            .node(node)
+            .map(|r| PyResponse {
+                frequency: r.frequency().to_vec(),
+                values: r.values().to_vec(),
+            })
+            .ok_or_else(|| missing_node(node, &self.inner.nodes()))
+    }
+
+    fn nodes(&self) -> Vec<String> {
+        self.inner.nodes().into_iter().map(String::from).collect()
     }
 }
 
