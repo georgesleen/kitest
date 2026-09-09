@@ -1,5 +1,9 @@
 //! The simulation backend seam.
 
+mod ngspice;
+
+pub use ngspice::{Ngspice, NgspiceError};
+
 use crate::{
     Ac, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Waveforms,
     stimulus::AcSupply,

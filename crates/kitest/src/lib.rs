@@ -1,17 +1,15 @@
 //! Core types and the simulation backend seam for kitest.
 
 mod analysis;
-mod backend;
+mod directives;
 mod kicad;
-mod ngspice;
-mod results;
-mod signal;
+mod sim;
 mod stimulus;
 
-pub use analysis::{Ac, Sweep, Tran};
-pub use backend::Backend;
+pub use analysis::{
+    OperatingPoint, Response, Signal, Spectra, Tolerance, Voltage, Waveforms,
+};
+pub use directives::{Ac, Sweep, Tran};
 pub use kicad::{KicadError, export_netlist};
-pub use ngspice::{Ngspice, NgspiceError};
-pub use results::{OperatingPoint, Spectra, Waveforms};
-pub use signal::{Response, Signal, Tolerance, Voltage};
+pub use sim::{Backend, Ngspice, NgspiceError};
 pub use stimulus::{AcSupply, DcSupply, Pulse, Sin, TranSource};

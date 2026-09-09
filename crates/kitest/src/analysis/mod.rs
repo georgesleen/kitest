@@ -1,10 +1,19 @@
-//! Parsed simulation outputs, one type per analysis domain.
+//! Simulation outputs and the assertions over them.
+
+mod frequency;
+mod response;
+mod signal;
+mod tolerance;
+mod voltage;
+
+pub use response::Response;
+pub use signal::Signal;
+pub use tolerance::Tolerance;
+pub use voltage::Voltage;
 
 use std::collections::BTreeMap;
 
 use num_complex::Complex64;
-
-use crate::{Response, Signal, signal::Voltage};
 
 /// DC operating-point voltages, one value per node.
 #[derive(Debug)]
