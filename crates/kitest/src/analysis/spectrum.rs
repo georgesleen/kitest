@@ -84,7 +84,8 @@ impl Waveform {
     ///
     /// # Panics
     /// If the two axes differ in length, if the signal has fewer than
-    /// two samples, or if `n` is less than two.
+    /// two samples, if the time axis is not strictly increasing, or if
+    /// `n` is less than two.
     fn resample(signal: &Signal, n: usize) -> Self {
         let time = signal.time();
         let values = signal.values();
@@ -94,6 +95,10 @@ impl Waveform {
         );
         assert!(time.len() >= 2, "resample needs at least two samples");
         assert!(n >= 2, "resample needs at least two output points");
+        assert!(
+            time.windows(2).all(|pair| pair[0] < pair[1]),
+            "time must be strictly increasing"
+        );
 
         let time_initial = time[0];
         let time_final = time[time.len() - 1];
@@ -671,5 +676,80 @@ mod tests {
         let hertz = tone.frequency().hertz();
         let error = (hertz - MEASURED_HZ).abs() / MEASURED_HZ;
         assert!(error < 0.001, "frequency = {hertz}");
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly increasing")]
+    fn rejects_a_repeated_time() {
+        let time = [0.0, 1.0, 1.0, 2.0];
+        let values = [0.0, 1.0, 2.0, 3.0];
+        Waveform::resample(&Signal::new(&time, &values), 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly increasing")]
+    fn rejects_a_backwards_time() {
+        let time = [0.0, 2.0, 1.0, 3.0];
+        let values = [0.0, 1.0, 2.0, 3.0];
+        Waveform::resample(&Signal::new(&time, &values), 8);
+    }
+
+    /// `count` evenly spaced times spanning `MEASURED_SPAN`.
+    fn even_times(count: usize) -> Vec<f64> {
+        (0..count)
+            .map(|i| MEASURED_SPAN * i as f64 / (count - 1) as f64)
+            .collect()
+    }
+
+    #[test]
+    fn measures_the_fundamental_of_a_square_wave() {
+        // A unit square holds a fundamental of 4 / pi, not 1.
+        let time = even_times(4001);
+        let values: Vec<f64> = time
+            .iter()
+            .map(|t| (2.0 * PI * MEASURED_HZ * t).sin().signum())
+            .collect();
+        let tone = dominant_tone(&Signal::new(&time, &values));
+
+        let hertz = tone.frequency().hertz();
+        assert!(
+            (hertz - MEASURED_HZ).abs() / MEASURED_HZ < 0.001,
+            "frequency = {hertz}"
+        );
+
+        let want = 4.0 / PI;
+        let volts = tone.amplitude().volts();
+        assert!((volts - want).abs() / want < 0.01, "amplitude = {volts}");
+    }
+
+    #[test]
+    fn dominant_means_the_largest_of_several_tones() {
+        let time = even_times(4001);
+        let loud = 2.5 * MEASURED_HZ;
+        let values: Vec<f64> = time
+            .iter()
+            .map(|t| {
+                (2.0 * PI * MEASURED_HZ * t).sin()
+                    + 3.0 * (2.0 * PI * loud * t).sin()
+            })
+            .collect();
+        let tone = dominant_tone(&Signal::new(&time, &values));
+
+        let hertz = tone.frequency().hertz();
+        assert!((hertz - loud).abs() / loud < 0.001, "frequency = {hertz}");
+
+        let volts = tone.amplitude().volts();
+        assert!((volts - 3.0).abs() / 3.0 < 0.01, "amplitude = {volts}");
+    }
+
+    #[test]
+    fn a_flat_signal_reports_no_amplitude() {
+        // The documented way to tell there is no tone to find.
+        let time = even_times(1001);
+        let values = vec![DC_BIAS; time.len()];
+        let tone = dominant_tone(&Signal::new(&time, &values));
+
+        let volts = tone.amplitude().volts();
+        assert!(volts < 1e-9, "amplitude = {volts}");
     }
 }
