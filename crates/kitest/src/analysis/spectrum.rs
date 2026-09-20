@@ -235,11 +235,22 @@ pub(crate) fn dominant_tone(signal: &Signal) -> Tone {
 
     let bin = spectrum.peak_bin();
     let offset = spectrum.parabolic_offset(bin);
+    let hertz = spectrum.frequency(bin, offset);
 
     Tone::new(
-        Frequency::new(spectrum.frequency(bin, offset)),
+        Frequency::new(hertz),
         Voltage::new(spectrum.amplitude(bin, offset)),
+        // The simulator's own rate, not the resampled one: interpolation
+        // cannot recover a cycle the simulator never sampled.
+        sample_rate(signal) / hertz,
     )
+}
+
+/// Mean samples per second over the times the simulator chose.
+fn sample_rate(signal: &Signal) -> f64 {
+    let time = signal.time();
+    let span = time[time.len() - 1] - time[0];
+    (time.len() - 1) as f64 / span
 }
 
 #[cfg(test)]
@@ -751,5 +762,36 @@ mod tests {
 
         let volts = tone.amplitude().volts();
         assert!(volts < 1e-9, "amplitude = {volts}");
+    }
+
+    #[test]
+    fn samples_per_cycle_reports_the_simulator_rate() {
+        let time = even_times(4001);
+        let values: Vec<f64> = time
+            .iter()
+            .map(|t| (2.0 * PI * MEASURED_HZ * t).sin())
+            .collect();
+        let tone = dominant_tone(&Signal::new(&time, &values));
+
+        // 4000 gaps over 20 ms is 200 kHz, against a 1234 Hz tone.
+        let want = (4000.0 / MEASURED_SPAN) / MEASURED_HZ;
+        let got = tone.samples_per_cycle();
+        assert!((got - want).abs() / want < 0.01, "got {got}");
+    }
+
+    #[test]
+    fn samples_per_cycle_exposes_an_aliased_measurement() {
+        // 8 kHz sampled at 10 kHz folds down to 2 kHz, and the tone
+        // looks entirely credible. Only the sample rate gives it away.
+        let time = even_times(201);
+        let values: Vec<f64> =
+            time.iter().map(|t| (2.0 * PI * 8000.0 * t).sin()).collect();
+        let tone = dominant_tone(&Signal::new(&time, &values));
+
+        let hertz = tone.frequency().hertz();
+        assert!((hertz - 2000.0).abs() < 50.0, "alias at {hertz}");
+
+        let got = tone.samples_per_cycle();
+        assert!(got < 10.0, "samples per cycle = {got}");
     }
 }

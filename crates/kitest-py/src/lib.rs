@@ -98,6 +98,11 @@ impl PyTone {
             inner: self.inner.amplitude(),
         }
     }
+
+    /// Simulator samples per cycle of the dominant sinusoid.
+    fn samples_per_cycle(&self) -> f64 {
+        self.inner.samples_per_cycle()
+    }
 }
 
 #[pyclass(name = "Voltage")]

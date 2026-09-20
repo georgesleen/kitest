@@ -16,13 +16,19 @@ use crate::{Frequency, Voltage};
 pub struct Tone {
     frequency: Frequency,
     amplitude: Voltage,
+    samples_per_cycle: f64,
 }
 
 impl Tone {
-    pub(crate) fn new(frequency: Frequency, amplitude: Voltage) -> Self {
+    pub(crate) fn new(
+        frequency: Frequency,
+        amplitude: Voltage,
+        samples_per_cycle: f64,
+    ) -> Self {
         Self {
             frequency,
             amplitude,
+            samples_per_cycle,
         }
     }
 
@@ -42,5 +48,21 @@ impl Tone {
     /// waveform. Near zero means the waveform holds no sinusoid.
     pub fn amplitude(&self) -> Voltage {
         self.amplitude
+    }
+
+    /// Simulator samples per cycle of the dominant sinusoid.
+    ///
+    /// Averaged over the run, from the times the simulator chose. A
+    /// waveform sampled too coarsely for its own oscillation aliases,
+    /// and the reported frequency is then a plausible but wrong lower
+    /// one, with nothing else to give it away. Roughly ten samples per
+    /// cycle is the usual minimum to trust a measurement; below about
+    /// two, Nyquist is violated outright.
+    ///
+    /// Assert on this when the frequency matters and the timestep is
+    /// not obviously fine enough. Tighten a coarse run with the step
+    /// on [`crate::Tran`].
+    pub fn samples_per_cycle(&self) -> f64 {
+        self.samples_per_cycle
     }
 }
