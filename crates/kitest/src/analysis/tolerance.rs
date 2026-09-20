@@ -6,7 +6,7 @@ pub enum Tolerance {
     /// Absolute distance from the target.
     Abs(f64),
     /// Percentage of the target.
-    Pct(f64),
+    Percent(f64),
 }
 
 impl Tolerance {
@@ -16,15 +16,15 @@ impl Tolerance {
     }
 
     /// A tolerance of `p` percent of the target.
-    pub fn pct(p: f64) -> Self {
-        Self::Pct(p)
+    pub fn percent(p: f64) -> Self {
+        Self::Percent(p)
     }
 
     /// The allowed distance from `target`: absolute as-is, percent of `|target|`.
     pub(crate) fn band(self, target: f64) -> f64 {
         match self {
             Self::Abs(v) => v,
-            Self::Pct(p) => p / 100.0 * target.abs(),
+            Self::Percent(p) => p / 100.0 * target.abs(),
         }
     }
 }

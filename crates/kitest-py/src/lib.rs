@@ -2,9 +2,9 @@ use num_complex::Complex64;
 use pyo3::prelude::*;
 
 use ::kitest::{
-    Ac, AcSupply, Backend, DcSupply, Ngspice, OperatingPoint, Pulse, Response,
-    Signal, Sin, Spectra, Sweep, Tolerance, Tran, TranSource, Voltage,
-    Waveforms,
+    Ac, AcSupply, Backend, DcSupply, Frequency, Ngspice, OperatingPoint,
+    Pulse, Response, Signal, Sin, Spectra, Sweep, Tolerance, Tone, Tran,
+    TranSource, Transient, Voltage,
 };
 
 /// Returns the kitest version string.
@@ -53,9 +53,49 @@ impl PyTolerance {
 
     /// A tolerance of `p` percent of the target.
     #[staticmethod]
-    fn pct(p: f64) -> Self {
+    fn percent(p: f64) -> Self {
         Self {
-            inner: Tolerance::pct(p),
+            inner: Tolerance::percent(p),
+        }
+    }
+}
+
+#[pyclass(name = "Frequency")]
+struct PyFrequency {
+    inner: Frequency,
+}
+
+#[pymethods]
+impl PyFrequency {
+    /// The value in hertz.
+    fn hertz(&self) -> f64 {
+        self.inner.hertz()
+    }
+
+    /// True if the frequency is within `tolerance` of `expected`.
+    fn near(&self, expected: f64, tolerance: PyTolerance) -> bool {
+        self.inner.near(expected, tolerance.inner)
+    }
+}
+
+#[pyclass(name = "Tone")]
+struct PyTone {
+    inner: Tone,
+}
+
+#[pymethods]
+impl PyTone {
+    /// The frequency of the dominant sinusoid.
+    fn frequency(&self) -> PyFrequency {
+        PyFrequency {
+            inner: self.inner.frequency(),
+        }
+    }
+
+    /// The amplitude of the dominant sinusoid, zero to peak.
+    fn amplitude(&self) -> PyVoltage {
+        PyVoltage {
+            inner: self.inner.amplitude(),
         }
     }
 }
@@ -145,14 +185,14 @@ impl PyNgspice {
         netlist: &str,
         sources: Vec<PyTranSource>,
         params: PyTran,
-    ) -> PyResult<PyWaveforms> {
+    ) -> PyResult<PyTransient> {
         let sources: Vec<TranSource> =
             sources.into_iter().map(|s| s.inner).collect();
-        let waveforms = self
+        let transient = self
             .inner
             .run_tran(netlist, &sources, params.inner)
             .map_err(runtime_error)?;
-        Ok(PyWaveforms { inner: waveforms })
+        Ok(PyTransient { inner: transient })
     }
 }
 
@@ -377,6 +417,13 @@ impl PySignal {
     fn overshoot(&self, target: f64) -> f64 {
         Signal::new(&self.time, &self.values).overshoot(target)
     }
+
+    /// The strongest sinusoid in this waveform.
+    fn dominant_tone(&self) -> PyTone {
+        PyTone {
+            inner: Signal::new(&self.time, &self.values).dominant_tone(),
+        }
+    }
 }
 
 #[pyclass(name = "Response")]
@@ -408,13 +455,13 @@ impl PyResponse {
     }
 }
 
-#[pyclass(name = "Waveforms")]
-struct PyWaveforms {
-    inner: Waveforms,
+#[pyclass(name = "Transient")]
+struct PyTransient {
+    inner: Transient,
 }
 
 #[pymethods]
-impl PyWaveforms {
+impl PyTransient {
     fn node(&self, node: &str) -> PyResult<PySignal> {
         self.inner
             .node(node)
@@ -467,9 +514,11 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTran>()?;
     m.add_class::<PyNgspice>()?;
     m.add_class::<PyOperatingPoint>()?;
-    m.add_class::<PyWaveforms>()?;
+    m.add_class::<PyTransient>()?;
     m.add_class::<PySpectra>()?;
     m.add_class::<PyVoltage>()?;
+    m.add_class::<PyFrequency>()?;
+    m.add_class::<PyTone>()?;
     m.add_class::<PySignal>()?;
     m.add_class::<PyResponse>()?;
     m.add_class::<PyTolerance>()?;

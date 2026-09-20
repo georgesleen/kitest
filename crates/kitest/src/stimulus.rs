@@ -82,17 +82,17 @@ const IDEAL_EDGE: f64 = 1e-9;
 /// A width and period long enough that a stepped pulse never repeats in a run.
 const ONE_SHOT: f64 = 1e30;
 
-/// A time-varying source for transient analysis, driving `node` with a waveform.
+/// A time-varying source for transient analysis, driving `node`.
 #[derive(Clone)]
 pub struct TranSource {
     node: String,
-    waveform: Waveform,
+    excitation: Excitation,
 }
 
-/// The waveform a [`TranSource`] plays. Each variant carries only its own
+/// The excitation a [`TranSource`] plays. Each variant carries only its own
 /// parameters, so a pulse and a sine can never be confused.
 #[derive(Clone)]
-enum Waveform {
+enum Excitation {
     Pulse(Pulse),
     Sin(Sin),
 }
@@ -102,7 +102,7 @@ impl TranSource {
     pub fn pulse(node: &str, pulse: Pulse) -> Self {
         Self {
             node: node.to_owned(),
-            waveform: Waveform::Pulse(pulse),
+            excitation: Excitation::Pulse(pulse),
         }
     }
 
@@ -110,7 +110,7 @@ impl TranSource {
     pub fn sin(node: &str, sin: Sin) -> Self {
         Self {
             node: node.to_owned(),
-            waveform: Waveform::Sin(sin),
+            excitation: Excitation::Sin(sin),
         }
     }
 }
@@ -118,9 +118,9 @@ impl TranSource {
 impl Stimulus for TranSource {
     /// Render as a SPICE source line with the given element name.
     fn spice_line(&self, name: &str) -> String {
-        let spec = match &self.waveform {
-            Waveform::Pulse(pulse) => pulse.spec(),
-            Waveform::Sin(sin) => sin.spec(),
+        let spec = match &self.excitation {
+            Excitation::Pulse(pulse) => pulse.spec(),
+            Excitation::Sin(sin) => sin.spec(),
         };
         format!("{name} {node} 0 {spec}", node = self.node)
     }

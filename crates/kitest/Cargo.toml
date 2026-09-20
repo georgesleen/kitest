@@ -8,5 +8,6 @@ publish = false
 
 [dependencies]
 num-complex = "0.4.6"
+realfft = "3.5.0"
 tempfile = "3.27.0"
 thiserror = "2"

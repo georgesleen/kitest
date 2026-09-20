@@ -5,7 +5,7 @@ mod ngspice;
 pub use ngspice::{Ngspice, NgspiceError};
 
 use crate::{
-    Ac, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Waveforms,
+    Ac, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Transient,
     stimulus::AcSupply,
 };
 
@@ -27,7 +27,7 @@ pub trait Backend {
         netlist: &str,
         sources: &[TranSource],
         params: Tran,
-    ) -> Result<Waveforms, Self::Error>;
+    ) -> Result<Transient, Self::Error>;
 
     /// Small-signal AC sweep.
     fn run_ac(

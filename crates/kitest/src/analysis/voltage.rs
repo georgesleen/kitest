@@ -43,8 +43,8 @@ mod tests {
     #[test]
     fn near_uses_percent_of_target() {
         // 1% of 5.0 is a 0.05 band around the target.
-        assert!(Voltage::new(4.96).near(5.0, Tolerance::pct(1.0)));
-        assert!(!Voltage::new(4.9).near(5.0, Tolerance::pct(1.0)));
+        assert!(Voltage::new(4.96).near(5.0, Tolerance::percent(1.0)));
+        assert!(!Voltage::new(4.9).near(5.0, Tolerance::percent(1.0)));
     }
 
     #[test]

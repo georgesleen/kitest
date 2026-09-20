@@ -3,12 +3,16 @@
 mod frequency;
 mod response;
 mod signal;
+mod spectrum;
 mod tolerance;
+mod tone;
 mod voltage;
 
+pub use frequency::Frequency;
 pub use response::Response;
 pub use signal::Signal;
 pub use tolerance::Tolerance;
+pub use tone::Tone;
 pub use voltage::Voltage;
 
 use std::collections::BTreeMap;
@@ -39,14 +43,14 @@ impl OperatingPoint {
     }
 }
 
-/// Time-domain waveforms from a transient analysis.
+/// Node waveforms from a transient analysis, over a shared time axis.
 #[derive(Debug)]
-pub struct Waveforms {
+pub struct Transient {
     time: Vec<f64>,
     signals: BTreeMap<String, Vec<f64>>,
 }
 
-impl Waveforms {
+impl Transient {
     pub(crate) fn new(
         time: Vec<f64>,
         signals: BTreeMap<String, Vec<f64>>,

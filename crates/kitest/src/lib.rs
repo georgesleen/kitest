@@ -7,7 +7,8 @@ mod sim;
 mod stimulus;
 
 pub use analysis::{
-    OperatingPoint, Response, Signal, Spectra, Tolerance, Voltage, Waveforms,
+    Frequency, OperatingPoint, Response, Signal, Spectra, Tolerance, Tone,
+    Transient, Voltage,
 };
 pub use directives::{Ac, Sweep, Tran};
 pub use kicad::{KicadError, export_netlist};

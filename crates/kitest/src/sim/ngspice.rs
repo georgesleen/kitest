@@ -11,7 +11,7 @@ use num_complex::Complex64;
 
 use crate::stimulus::{AcSupply, inject};
 use crate::{
-    Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Waveforms,
+    Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Transient,
 };
 
 /// Ngspice plotname for each analysis, used to validate a raw file is what we ran.
@@ -52,9 +52,9 @@ impl Backend for Ngspice {
         netlist: &str,
         sources: &[TranSource],
         params: Tran,
-    ) -> Result<Waveforms, NgspiceError> {
+    ) -> Result<Transient, NgspiceError> {
         let deck = inject(netlist, sources);
-        waveforms(self.run_raw(&deck, &tran_command(&params))?)
+        transient(self.run_raw(&deck, &tran_command(&params))?)
     }
 
     fn run_ac(
@@ -229,14 +229,14 @@ fn operating_point(table: RawTable) -> Result<OperatingPoint, NgspiceError> {
     Ok(OperatingPoint::new(voltages))
 }
 
-/// Interpret a raw file as transient waveforms: a `time` axis plus node series.
-fn waveforms(table: RawTable) -> Result<Waveforms, NgspiceError> {
+/// Interpret a raw file as a transient run: a `time` axis plus node series.
+fn transient(table: RawTable) -> Result<Transient, NgspiceError> {
     expect_plotname(&table, PLOTNAME_TRAN)?;
     let mut columns = real_columns(table.columns, "transient")?;
     let time = columns.remove(AXIS_TIME).ok_or_else(|| {
         NgspiceError::Parse("transient result missing time axis".into())
     })?;
-    Ok(Waveforms::new(time, node_signals(columns)))
+    Ok(Transient::new(time, node_signals(columns)))
 }
 
 /// Interpret a raw file as an AC sweep: a `frequency` axis plus complex node series.
@@ -421,7 +421,7 @@ Values:
 
     #[test]
     fn reshapes_multiple_points() {
-        let out = waveforms(parse_table(TRANSIENT).unwrap()).unwrap();
+        let out = transient(parse_table(TRANSIENT).unwrap()).unwrap();
         let out = out.node("out").expect("node present");
         assert_eq!(out.time(), &[0.0, 1.0e-3]);
         assert_eq!(out.values(), &[1.0, 2.0]);
@@ -455,7 +455,7 @@ Variables:
 Values:
  0 1.0
 ";
-        let err = waveforms(parse_table(raw).unwrap())
+        let err = transient(parse_table(raw).unwrap())
             .expect_err("missing time axis");
         assert!(err.to_string().contains("time axis"));
     }
