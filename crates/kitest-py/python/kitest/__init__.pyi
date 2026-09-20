@@ -39,6 +39,7 @@ class Ac:
 
 class Tran:
     def __init__(self, step: float, stop: float) -> None: ...
+    def start(self, start: float) -> Tran: ...
 
 class Tolerance:
     @staticmethod

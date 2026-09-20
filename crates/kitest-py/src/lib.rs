@@ -380,7 +380,14 @@ impl PyTran {
     #[new]
     fn new(step: f64, stop: f64) -> Self {
         Self {
-            inner: Tran { step, stop },
+            inner: Tran::new(step, stop),
+        }
+    }
+
+    /// Discard output before `start` seconds.
+    fn start(&self, start: f64) -> Self {
+        Self {
+            inner: self.inner.start(start),
         }
     }
 }

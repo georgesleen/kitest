@@ -124,7 +124,12 @@ fn build_deck(netlist: &str, directive: &str, raw_path: &Path) -> String {
 }
 
 fn tran_command(params: &Tran) -> String {
-    format!("tran {} {}", params.step, params.stop)
+    format!(
+        "tran {} {} {}",
+        params.step_seconds(),
+        params.stop_seconds(),
+        params.start_seconds()
+    )
 }
 
 fn ac_command(params: &Ac) -> String {
@@ -490,13 +495,13 @@ Values:
 
     #[test]
     fn tran_command_renders() {
-        assert_eq!(
-            tran_command(&Tran {
-                step: 1e-3,
-                stop: 5e-3,
-            }),
-            "tran 0.001 0.005"
-        );
+        assert_eq!(tran_command(&Tran::new(1e-3, 5e-3)), "tran 0.001 0.005 0");
+    }
+
+    #[test]
+    fn tran_command_carries_the_start_time() {
+        let params = Tran::new(1e-3, 5e-3).start(2e-3);
+        assert_eq!(tran_command(&params), "tran 0.001 0.005 0.002");
     }
 
     #[test]

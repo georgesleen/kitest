@@ -40,10 +40,7 @@ fn tran_charges_rc() {
         .run_tran(
             RC,
             &[TranSource::pulse("vin", Pulse::step(0.0, 1.0))],
-            Tran {
-                step: 1e-5,
-                stop: 5e-3,
-            },
+            Tran::new(1e-5, 5e-3),
         )
         .unwrap();
     let vout = r.node("vout").expect("vout present");
@@ -52,6 +49,26 @@ fn tran_charges_rc() {
         "did not settle"
     );
     assert!(vout.overshoot(1.0) < 0.01, "unexpected overshoot");
+}
+
+#[test]
+fn tran_start_discards_the_early_output() {
+    let start = 2e-3;
+    let r = Ngspice::default()
+        .run_tran(
+            RC,
+            &[TranSource::pulse("vin", Pulse::step(0.0, 1.0))],
+            Tran::new(1e-5, 5e-3).start(start),
+        )
+        .unwrap();
+    let vout = r.node("vout").expect("vout present");
+    let first = vout.time()[0];
+    assert!(first >= start, "output begins at {first}");
+    // The charge still happened, so the tail sits where it would have.
+    assert!(
+        vout.settles_to(0.993, Tolerance::abs(0.02), 1e-3),
+        "did not settle"
+    );
 }
 
 #[test]

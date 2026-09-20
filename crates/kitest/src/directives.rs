@@ -3,8 +3,41 @@
 /// Transient analysis parameters, times in seconds.
 #[derive(Debug, Clone, Copy)]
 pub struct Tran {
-    pub step: f64,
-    pub stop: f64,
+    step: f64,
+    stop: f64,
+    start: f64,
+}
+
+impl Tran {
+    /// Run to `stop` seconds, printing every `step` seconds.
+    pub fn new(step: f64, stop: f64) -> Self {
+        Self {
+            step,
+            stop,
+            start: 0.0,
+        }
+    }
+
+    /// Discard output before `start` seconds.
+    ///
+    /// The simulation still runs from zero, so the circuit behaves the
+    /// same and only the saved output is trimmed. Use this to keep an
+    /// oscillator's startup out of a steady-state measurement.
+    pub fn start(self, start: f64) -> Self {
+        Self { start, ..self }
+    }
+
+    pub(crate) fn step_seconds(&self) -> f64 {
+        self.step
+    }
+
+    pub(crate) fn stop_seconds(&self) -> f64 {
+        self.stop
+    }
+
+    pub(crate) fn start_seconds(&self) -> f64 {
+        self.start
+    }
 }
 
 /// Small-signal AC sweep parameters, frequencies in Hz.
