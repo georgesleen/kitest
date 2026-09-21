@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use num_complex::Complex64;
 
-use crate::stimulus::{AcSupply, inject};
+use crate::stimulus::{AcSupply, inject, inject_tran};
 use crate::{
     Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Transient,
 };
@@ -53,7 +53,7 @@ impl Backend for Ngspice {
         sources: &[TranSource],
         params: Tran,
     ) -> Result<Transient, NgspiceError> {
-        let deck = inject(netlist, sources);
+        let deck = inject_tran(netlist, sources, params.noise_spec());
         transient(self.run_raw(&deck, &tran_command(&params))?)
     }
 

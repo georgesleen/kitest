@@ -1,0 +1,18 @@
+* colpitts
+* Common-collector Colpitts. The tank is l1 across c1 in series with
+* c2, tapped at the emitter. cblock keeps l1 from shorting the bias
+* divider at DC. Supply node vcc is driven by the testbench.
+*
+* Model card: Fairchild 2N3904, 88-09-08.
+.model q2n3904 npn(is=6.734f xti=3 eg=1.11 vaf=74.03 bf=416.4 ne=1.259
++ ise=6.734f ikf=66.78m xtb=1.5 br=.7371 nc=2 isc=0 ikr=0 rc=1
++ cjc=3.638p mjc=.3085 vjc=.75 fc=.5 cje=4.493p mje=.2593 vje=.75
++ tr=239.5n tf=301.2p itf=.4 vtf=4 xtf=2 rb=10)
+q1 vcc base emit q2n3904
+rb1 vcc base 47k
+rb2 base 0 47k
+re emit 0 4.7k
+c1 base emit 470p
+c2 emit 0 470p
+l1 base tap 1u
+cblock tap 0 100n
