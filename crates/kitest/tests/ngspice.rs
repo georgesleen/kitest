@@ -3,23 +3,8 @@ use kitest::{
     TranSource,
 };
 
-const DIVIDER: &str = "\
-* voltage divider
-r1 vin vout 10k
-r2 vout 0 10k
-";
-
-const RC: &str = "\
-* rc charge
-r1 vin vout 1k
-c1 vout 0 1u
-";
-
-const RC_LOWPASS: &str = "\
-* rc low-pass
-r1 vin vout 1k
-c1 vout 0 1u
-";
+const DIVIDER: &str = include_str!("../../../examples/spice/divider.cir");
+const RC: &str = include_str!("../../../examples/spice/rc.cir");
 
 #[test]
 fn op_solves_voltage_divider() {
@@ -75,7 +60,7 @@ fn tran_start_discards_the_early_output() {
 fn ac_rc_lowpass_cutoff() {
     let r = Ngspice::default()
         .run_ac(
-            RC_LOWPASS,
+            RC,
             &[AcSupply::new("vin").magnitude(1.0).bias(0.0)],
             Ac {
                 sweep: Sweep::Dec,

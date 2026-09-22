@@ -2,7 +2,7 @@ use kitest::export_netlist;
 use std::path::Path;
 
 const DIVIDER: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/divider");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/kicad/divider");
 
 #[test]
 fn exports_divider_matching_golden() {

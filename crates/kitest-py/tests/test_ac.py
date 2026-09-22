@@ -1,8 +1,9 @@
 import math
 
 import kitest
+from netlists import load
 
-RC_LOWPASS = "* rc low-pass\nr1 vin vout 1k\nc1 vout 0 1u"
+RC_LOWPASS = load("rc.cir")
 
 
 def test_run_ac_lowpass_cutoff():

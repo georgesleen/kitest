@@ -1,8 +1,9 @@
 import kitest
+from netlists import load
 import pytest
 
 # The first line of a SPICE deck is the title and is ignored, so lead with one.
-DIVIDER = "* voltage divider\nr1 vin vout 10k\nr2 vout 0 10k"
+DIVIDER = load("divider.cir")
 
 
 def test_run_op_solves_divider():

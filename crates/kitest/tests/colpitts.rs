@@ -5,7 +5,7 @@ use std::f64::consts::PI;
 use kitest::{Backend, Ngspice, Tran, TranSource};
 
 /// Stands in for a KiCad export until the schematic exists.
-const COLPITTS: &str = include_str!("../../../examples/colpitts/colpitts.cir");
+const COLPITTS: &str = include_str!("../../../examples/spice/colpitts.cir");
 
 const INDUCTANCE: f64 = 1e-6;
 const TANK_CAP: f64 = 470e-12;

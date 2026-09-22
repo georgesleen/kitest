@@ -5,7 +5,7 @@ use std::path::Path;
 
 const DIVIDER_SCH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../examples/divider/divider.kicad_sch"
+    "/../../examples/kicad/divider/divider.kicad_sch"
 );
 
 #[test]

@@ -1,0 +1,8 @@
+* The tank of tank.cir behind a decoupled rail: rsup is the supply's
+* own impedance and cdec shunts the noise to ground. Good power
+* integrity works against noise-driven startup.
+rsup vcc rail 10
+cdec rail 0 100n
+rs rail tank 10k
+l1 tank 0 1u
+c1 tank 0 235p

@@ -1,6 +1,7 @@
 import kitest
+from netlists import load
 
-RC = "* rc charge\nr1 vin vout 1k\nc1 vout 0 1u"
+RC = load("rc.cir")
 
 
 def test_run_tran_charges_rc():

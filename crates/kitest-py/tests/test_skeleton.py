@@ -5,6 +5,7 @@ import kitest
 DIVIDER_SCH = (
     Path(__file__).resolve().parents[3]
     / "examples"
+    / "kicad"
     / "divider"
     / "divider.kicad_sch"
 )

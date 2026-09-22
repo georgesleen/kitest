@@ -1,7 +1,8 @@
 import kitest
+from netlists import load
 
 # A sine drives a divider, so vout follows vin at half the amplitude.
-DIVIDER = "* tone divider\nr1 vin vout 1k\nr2 vout 0 1k"
+DIVIDER = load("divider.cir")
 
 HERTZ = 1000.0
 AMPLITUDE = 2.0
