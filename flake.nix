@@ -25,6 +25,8 @@
               clippy
               rustfmt
               rust-analyzer
+              # lldb-dap: the DAP adapter helix drives for `:debug-start`.
+              lldb
               ngspice
               python3
               uv
