@@ -93,29 +93,55 @@ pub struct TranSource {
 /// parameters, so a pulse and a sine can never be confused.
 #[derive(Clone)]
 enum Excitation {
-    Dc(f64),
+    /// A constant rail, carrying `noise` volts RMS of supply noise.
+    Dc {
+        volts: f64,
+        noise: f64,
+    },
     Pulse(Pulse),
     Sin(Sin),
 }
 
-/// Supply noise for a DC source: amplitude in volts, and the interval
-/// ngspice draws each new sample over.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Noise {
-    pub volts: f64,
-    pub interval: f64,
-}
+/// Default supply noise on a rail, in volts RMS.
+///
+/// Small enough to sit far below any assertion, large enough to start
+/// an oscillator quickly. A real 9 V rail is noisier than this.
+const DEFAULT_RAIL_NOISE: f64 = 1e-3;
 
 impl TranSource {
-    /// Hold `node` at a constant `volts`.
+    /// Hold `node` at a constant `volts`, with a little supply noise.
     ///
-    /// Only a constant source can carry supply noise, so a circuit that
-    /// has to start itself, such as an oscillator, wants its supply
-    /// driven this way.
+    /// SPICE is otherwise perfectly silent, and a silent simulator is
+    /// not a neutral one: an oscillator's quiescent bias point is a
+    /// valid solution, so whether a noiseless transient ever leaves it
+    /// comes down to solver rounding. A real oscillator is started by
+    /// its own thermal noise, so modelling that makes startup a
+    /// property of the circuit instead of the tolerances.
+    ///
+    /// Noise lives on the rail rather than on the analysis because a
+    /// rail is the only thing that can carry it: ngspice silently
+    /// discards a transient function when `trnoise` sits beside it, so
+    /// a pulse or a sine can never be noisy. Asking for noise where it
+    /// would not apply is therefore not expressible.
     pub fn dc(node: &str, volts: f64) -> Self {
+        Self::rail(node, volts, DEFAULT_RAIL_NOISE)
+    }
+
+    /// Hold `node` at a perfectly silent constant `volts`.
+    ///
+    /// Faster, and repeatable to the last digit. A circuit that has to
+    /// start itself may then fail to, or may start on the solver's own
+    /// rounding error, which is not a property of the circuit and
+    /// shifts with tolerances and timestep.
+    pub fn ideal_dc(node: &str, volts: f64) -> Self {
+        Self::rail(node, volts, 0.0)
+    }
+
+    /// Hold `node` at `volts` with `noise` volts RMS of supply noise.
+    pub fn rail(node: &str, volts: f64, noise: f64) -> Self {
         Self {
             node: node.to_owned(),
-            excitation: Excitation::Dc(volts),
+            excitation: Excitation::Dc { volts, noise },
         }
     }
 
@@ -135,21 +161,20 @@ impl TranSource {
         }
     }
 
-    /// Render with `noise` added, which only a DC source can carry.
+    /// Render, drawing noise samples every `interval` seconds.
     ///
-    /// ngspice silently discards a transient function when `trnoise`
-    /// sits beside it, so a pulse or a sine renders unchanged and the
-    /// noise is dropped rather than eating the stimulus.
-    pub(crate) fn spice_line_noisy(
+    /// ngspice sets a breakpoint at every noise sample, so the interval
+    /// has to be the run's own print step. A 5 ms run took 67 s at a
+    /// 1 ns interval against 33 ms at the print step.
+    pub(crate) fn spice_line_sampled(
         &self,
         name: &str,
-        noise: Option<Noise>,
+        interval: f64,
     ) -> String {
         let line = self.spice_line(name);
-        match (&self.excitation, noise) {
-            (Excitation::Dc(_), Some(noise)) => {
-                let Noise { volts, interval } = noise;
-                format!("{line} trnoise({volts} {interval} 0 0)")
+        match &self.excitation {
+            Excitation::Dc { noise, .. } if *noise > 0.0 => {
+                format!("{line} trnoise({noise} {interval} 0 0)")
             }
             _ => line,
         }
@@ -160,7 +185,7 @@ impl Stimulus for TranSource {
     /// Render as a SPICE source line with the given element name.
     fn spice_line(&self, name: &str) -> String {
         let spec = match &self.excitation {
-            Excitation::Dc(volts) => format!("dc {volts}"),
+            Excitation::Dc { volts, .. } => format!("dc {volts}"),
             Excitation::Pulse(pulse) => pulse.spec(),
             Excitation::Sin(sin) => sin.spec(),
         };
@@ -278,17 +303,17 @@ pub(crate) fn inject<S: Stimulus>(netlist: &str, sources: &[S]) -> String {
     deck
 }
 
-/// Inject transient sources, hanging `noise` on the DC ones.
+/// Inject transient sources, sampling any rail noise every `interval`.
 pub(crate) fn inject_tran(
     netlist: &str,
     sources: &[TranSource],
-    noise: Option<Noise>,
+    interval: f64,
 ) -> String {
     let mut deck = netlist.to_owned();
     for (index, source) in sources.iter().enumerate() {
         let name = format!("{SUPPLY_PREFIX}{}", index + 1);
         deck.push('\n');
-        deck.push_str(&source.spice_line_noisy(&name, noise));
+        deck.push_str(&source.spice_line_sampled(&name, interval));
     }
     deck
 }
@@ -395,11 +420,6 @@ mod tests {
         );
     }
 
-    const NOISE: Noise = Noise {
-        volts: 1e-3,
-        interval: 1e-9,
-    };
-
     #[test]
     fn dc_source_renders_a_constant() {
         let source = TranSource::dc("vcc", 9.0);
@@ -407,31 +427,30 @@ mod tests {
     }
 
     #[test]
-    fn noise_rides_a_dc_source() {
+    fn a_rail_carries_its_noise() {
         let source = TranSource::dc("vcc", 9.0);
         assert_eq!(
-            source.spice_line_noisy("Vkt1", Some(NOISE)),
+            source.spice_line_sampled("Vkt1", 1e-9),
             "Vkt1 vcc 0 dc 9 trnoise(0.001 0.000000001 0 0)"
         );
     }
 
     #[test]
-    fn noise_never_rides_a_transient_function() {
-        // ngspice silently drops the PULSE if trnoise sits beside it,
-        // so the stimulus wins and the noise is left off.
-        let source = TranSource::pulse("vin", Pulse::step(0.0, 1.0));
-        let plain = source.spice_line("Vkt1");
-        assert_eq!(source.spice_line_noisy("Vkt1", Some(NOISE)), plain);
-
-        let source = TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3));
-        let plain = source.spice_line("Vkt1");
-        assert_eq!(source.spice_line_noisy("Vkt1", Some(NOISE)), plain);
+    fn an_ideal_rail_carries_none() {
+        let source = TranSource::ideal_dc("vcc", 9.0);
+        assert_eq!(source.spice_line_sampled("Vkt1", 1e-9), "Vkt1 vcc 0 dc 9");
     }
 
     #[test]
-    fn an_ideal_run_asks_for_no_noise() {
-        let source = TranSource::dc("vcc", 9.0);
+    fn a_transient_function_is_never_sampled() {
+        // ngspice silently drops the PULSE if trnoise sits beside it,
+        // so only a rail can be noisy and nothing else is touched.
+        let source = TranSource::pulse("vin", Pulse::step(0.0, 1.0));
         let plain = source.spice_line("Vkt1");
-        assert_eq!(source.spice_line_noisy("Vkt1", None), plain);
+        assert_eq!(source.spice_line_sampled("Vkt1", 1e-9), plain);
+
+        let source = TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3));
+        let plain = source.spice_line("Vkt1");
+        assert_eq!(source.spice_line_sampled("Vkt1", 1e-9), plain);
     }
 }

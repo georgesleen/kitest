@@ -53,7 +53,7 @@ impl Backend for Ngspice {
         sources: &[TranSource],
         params: Tran,
     ) -> Result<Transient, NgspiceError> {
-        let deck = inject_tran(netlist, sources, params.noise_spec());
+        let deck = inject_tran(netlist, sources, params.step_seconds());
         transient(self.run_raw(&deck, &tran_command(&params))?)
     }
 
