@@ -21,6 +21,11 @@ fn resonant_hertz() -> f64 {
     1.0 / (2.0 * PI * (INDUCTANCE * CAPACITANCE).sqrt())
 }
 
+/// A rail with enough noise to excite the tank.
+fn noisy_rail() -> TranSource {
+    TranSource::noisy_dc("vcc", 9.0, 1e-3)
+}
+
 fn run(netlist: &str, rail: TranSource) -> Transient {
     Ngspice::default()
         .run_tran(netlist, &[rail], Tran::new(1e-9, 20e-6).start(10e-6))
@@ -33,7 +38,7 @@ fn tank_of(result: &Transient) -> Signal<'_> {
 
 #[test]
 fn a_noisy_rail_rings_a_passive_tank() {
-    let result = run(TANK, TranSource::dc("vcc", 9.0));
+    let result = run(TANK, noisy_rail());
     let tone = tank_of(&result).dominant_tone();
 
     let volts = tone.amplitude().volts();
@@ -48,7 +53,7 @@ fn a_noisy_rail_rings_a_passive_tank() {
 
 #[test]
 fn an_ideal_rail_leaves_a_passive_tank_dead() {
-    let result = run(TANK, TranSource::ideal_dc("vcc", 9.0));
+    let result = run(TANK, TranSource::dc("vcc", 9.0));
     let volts = tank_of(&result).dominant_tone().amplitude().volts();
     assert!(volts < 1e-12, "amplitude = {volts}");
 }
@@ -59,10 +64,10 @@ fn decoupling_the_rail_starves_the_tank() {
     // supply impedance and the decoupling capacitor form a low-pass
     // that keeps the noise away from the circuit it would have
     // started. Measured about 100x down.
-    let bare = run(TANK, TranSource::dc("vcc", 9.0));
+    let bare = run(TANK, noisy_rail());
     let bare_volts = tank_of(&bare).dominant_tone().amplitude().volts();
 
-    let quiet = run(DECOUPLED, TranSource::dc("vcc", 9.0));
+    let quiet = run(DECOUPLED, noisy_rail());
     let quiet_volts = tank_of(&quiet).dominant_tone().amplitude().volts();
 
     let ratio = bare_volts / quiet_volts;

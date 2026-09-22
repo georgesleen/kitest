@@ -21,8 +21,8 @@ fn colpitts_starts_and_runs_at_the_tank_frequency() {
     let r = Ngspice::default()
         .run_tran(
             COLPITTS,
-            // Supply noise starts it, the way a real one starts.
-            &[TranSource::dc("vcc", 9.0)],
+            // Rail noise starts it, until a node kick can.
+            &[TranSource::noisy_dc("vcc", 9.0, 1e-3)],
             Tran::new(1e-9, 25e-6).start(5e-6),
         )
         .expect("simulation ran");

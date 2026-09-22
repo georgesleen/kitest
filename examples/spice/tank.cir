@@ -1,7 +1,7 @@
-* Passive LC tank on a supply rail. No active device, so nothing but
-* supply noise can excite it: an ideal rail leaves this node dead.
-* Resonates at 1 / (2 pi sqrt(L C)) = 10.38 MHz, and rs sets the
-* loaded Q to about 150, which is a resonance 0.65% wide.
+* Passive LC tank on a supply rail. No gain, so only the rail's noise
+* can excite it. rl is a real inductor's loss at Q=50, giving a loaded
+* Q near 38: a resonance 2.6% wide at 10.38 MHz.
 rs vcc tank 10k
-l1 tank 0 1u
+l1 tank lmid 1u
+rl lmid 0 1.3
 c1 tank 0 235p
