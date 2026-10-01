@@ -320,6 +320,22 @@ struct PyTranSource {
 
 #[pymethods]
 impl PyTranSource {
+    /// Hold `node` at a constant `volts`.
+    #[staticmethod]
+    fn dc(node: &str, volts: f64) -> Self {
+        Self {
+            inner: TranSource::dc(node, volts),
+        }
+    }
+
+    /// Hold `node` at `volts`, with `noise` volts RMS of supply noise.
+    #[staticmethod]
+    fn noisy_dc(node: &str, volts: f64, noise: f64) -> Self {
+        Self {
+            inner: TranSource::noisy_dc(node, volts, noise),
+        }
+    }
+
     #[staticmethod]
     fn pulse(node: &str, pulse: PyPulse) -> Self {
         Self {

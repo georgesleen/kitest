@@ -1,25 +1,47 @@
 //! Test-side stimulus injected into a netlist body.
 
-/// Prefix for injected sources, kept distinct from a design's own `V` elements.
-const SUPPLY_PREFIX: &str = "Vkt";
+/// Prefix for injected sources, kept distinct from a design's own elements.
+const SUPPLY_PREFIX: &str = "kt";
 
 /// A source that can render itself as a SPICE element line.
 pub(crate) trait Stimulus {
     fn spice_line(&self, name: &str) -> String;
+
+    /// The kind of source this renders as.
+    fn element(&self) -> Element;
+}
+
+/// The kind of independent source kitest injects.
+#[derive(Clone, Copy)]
+pub(crate) enum Element {
+    Voltage,
+    Current,
+}
+
+impl Element {
+    /// The SPICE element letter that selects this source type.
+    fn letter(self) -> char {
+        match self {
+            Self::Voltage => 'V',
+            Self::Current => 'I',
+        }
+    }
 }
 
 /// A DC voltage supply.
 #[derive(Clone)]
 pub struct DcSupply {
     node: String,
+    element: Element,
     volts: f64,
 }
 
 impl DcSupply {
-    /// DC supply of `volts` on `node`.
+    /// A DC supply holding `node` at `volts`.
     pub fn new(node: &str, volts: f64) -> Self {
         Self {
             node: node.to_owned(),
+            element: Element::Voltage,
             volts,
         }
     }
@@ -34,21 +56,27 @@ impl Stimulus for DcSupply {
             volts = self.volts
         )
     }
+
+    fn element(&self) -> Element {
+        self.element
+    }
 }
 
 /// An AC supply.
 #[derive(Clone)]
 pub struct AcSupply {
     node: String,
+    element: Element,
     bias: f64,
     magnitude: f64,
 }
 
 impl AcSupply {
-    /// Create a new AcSupply with defaults of unit drive and zero bias.
+    /// An AC voltage source on `node`, of unit magnitude and zero bias.
     pub fn new(node: &str) -> Self {
         Self {
             node: node.to_owned(),
+            element: Element::Voltage,
             bias: 0.0,
             magnitude: 1.0,
         }
@@ -75,17 +103,24 @@ impl Stimulus for AcSupply {
             magnitude = self.magnitude
         )
     }
+
+    fn element(&self) -> Element {
+        self.element
+    }
 }
 
 /// Near-ideal edge that still keeps the transient solver converging.
 const IDEAL_EDGE: f64 = 1e-9;
 /// A width and period long enough that a stepped pulse never repeats in a run.
 const ONE_SHOT: f64 = 1e30;
+/// Print steps a kick lasts for, keeping it well inside one cycle.
+const KICK_STEPS: f64 = 10.0;
 
 /// A time-varying source for transient analysis, driving `node`.
 #[derive(Clone)]
 pub struct TranSource {
     node: String,
+    element: Element,
     excitation: Excitation,
 }
 
@@ -98,35 +133,27 @@ enum Excitation {
         volts: f64,
         noise: f64,
     },
+    /// A current impulse of `amps`, timed against the run's print step.
+    Kick {
+        amps: f64,
+    },
     Pulse(Pulse),
     Sin(Sin),
 }
 
 impl TranSource {
     /// Hold `node` at a constant `volts`.
-    ///
-    /// A perfectly quiet rail, which is what most tests want: the
-    /// simulation is then faster and repeatable to the last digit.
     pub fn dc(node: &str, volts: f64) -> Self {
         Self::noisy_dc(node, volts, 0.0)
     }
 
     /// Hold `node` at `volts`, with `noise` volts RMS of supply noise.
     ///
-    /// For modelling a noise floor, not for starting a circuit. A
-    /// self-starting circuit is better excited where it resonates than
-    /// through its supply, since the supply is the one node a good
-    /// board deliberately decouples: measured on a passive tank, the
-    /// same rail noise is 60x weaker behind a decoupling capacitor.
-    ///
-    /// Noise belongs to the rail rather than to the analysis because a
-    /// rail is the only thing that can carry it. ngspice silently
-    /// discards a transient function when `trnoise` sits beside it, so
-    /// a pulse or a sine can never be noisy, and asking for noise
-    /// where it could not apply is therefore not expressible.
+    /// For a noise floor, not for starting a circuit.
     pub fn noisy_dc(node: &str, volts: f64, noise: f64) -> Self {
         Self {
             node: node.to_owned(),
+            element: Element::Voltage,
             excitation: Excitation::Dc { volts, noise },
         }
     }
@@ -135,6 +162,7 @@ impl TranSource {
     pub fn pulse(node: &str, pulse: Pulse) -> Self {
         Self {
             node: node.to_owned(),
+            element: Element::Voltage,
             excitation: Excitation::Pulse(pulse),
         }
     }
@@ -143,39 +171,52 @@ impl TranSource {
     pub fn sin(node: &str, sin: Sin) -> Self {
         Self {
             node: node.to_owned(),
+            element: Element::Voltage,
             excitation: Excitation::Sin(sin),
         }
     }
 
-    /// Render, drawing noise samples every `interval` seconds.
+    /// Inject a brief current impulse of `amps` into `node`.
     ///
-    /// ngspice sets a breakpoint at every noise sample, so the interval
-    /// has to be the run's own print step. A 5 ms run took 67 s at a
-    /// 1 ns interval against 33 ms at the print step.
-    pub(crate) fn spice_line_sampled(
-        &self,
-        name: &str,
-        interval: f64,
-    ) -> String {
-        let line = self.spice_line(name);
-        match &self.excitation {
-            Excitation::Dc { noise, .. } if *noise > 0.0 => {
-                format!("{line} trnoise({noise} {interval} 0 0)")
-            }
-            _ => line,
+    /// The impulse carries no DC, so the operating point is unchanged.
+    /// Its width and delay follow the run's print step.
+    pub fn kick(node: &str, amps: f64) -> Self {
+        Self {
+            node: node.to_owned(),
+            element: Element::Current,
+            excitation: Excitation::Kick { amps },
         }
     }
-}
 
-impl Stimulus for TranSource {
-    /// Render as a SPICE source line with the given element name.
-    fn spice_line(&self, name: &str) -> String {
-        let spec = match &self.excitation {
-            Excitation::Dc { volts, .. } => format!("dc {volts}"),
-            Excitation::Pulse(pulse) => pulse.spec(),
-            Excitation::Sin(sin) => sin.spec(),
-        };
-        format!("{name} {node} 0 {spec}", node = self.node)
+    /// Render as a SPICE element line, timed against a print step of `interval`.
+    pub(crate) fn spice_line(&self, name: &str, interval: f64) -> String {
+        let node = &self.node;
+        match &self.excitation {
+            Excitation::Dc { volts, noise } if *noise > 0.0 => {
+                format!(
+                    "{name} {node} 0 dc {volts} trnoise({noise} {interval} 0 0)"
+                )
+            }
+            Excitation::Dc { volts, .. } => {
+                format!("{name} {node} 0 dc {volts}")
+            }
+            Excitation::Kick { amps } => {
+                let spec = Pulse::step(0.0, *amps)
+                    .delay(interval)
+                    .width(KICK_STEPS * interval)
+                    .period(ONE_SHOT)
+                    .spec();
+                format!("{name} {node} 0 {spec}")
+            }
+            Excitation::Pulse(pulse) => {
+                format!("{name} {node} 0 {}", pulse.spec())
+            }
+            Excitation::Sin(sin) => format!("{name} {node} 0 {}", sin.spec()),
+        }
+    }
+
+    pub(crate) fn element(&self) -> Element {
+        self.element
     }
 }
 
@@ -283,13 +324,22 @@ pub(crate) fn inject<S: Stimulus>(netlist: &str, sources: &[S]) -> String {
     for (index, source) in sources.iter().enumerate() {
         deck.push('\n');
         deck.push_str(
-            &source.spice_line(&format!("{SUPPLY_PREFIX}{}", index + 1)),
+            &source.spice_line(&element_name(source.element(), index)),
         );
     }
     deck
 }
 
-/// Inject transient sources, sampling any rail noise every `interval`.
+/// The unique element name kitest gives the `index`th injected source.
+fn element_name(element: Element, index: usize) -> String {
+    format!(
+        "{letter}{SUPPLY_PREFIX}{n}",
+        letter = element.letter(),
+        n = index + 1
+    )
+}
+
+/// Inject transient sources, timed against a print step of `interval`.
 pub(crate) fn inject_tran(
     netlist: &str,
     sources: &[TranSource],
@@ -297,9 +347,9 @@ pub(crate) fn inject_tran(
 ) -> String {
     let mut deck = netlist.to_owned();
     for (index, source) in sources.iter().enumerate() {
-        let name = format!("{SUPPLY_PREFIX}{}", index + 1);
+        let name = element_name(source.element(), index);
         deck.push('\n');
-        deck.push_str(&source.spice_line_sampled(&name, interval));
+        deck.push_str(&source.spice_line(&name, interval));
     }
     deck
 }
@@ -361,7 +411,8 @@ mod tests {
     #[test]
     fn pulse_step_renders_one_shot() {
         assert_eq!(
-            TranSource::pulse("vin", Pulse::step(0.0, 1.0)).spice_line("Vkt1"),
+            TranSource::pulse("vin", Pulse::step(0.0, 1.0))
+                .spice_line("Vkt1", 1e-9),
             "Vkt1 vin 0 PULSE(0 1 0 0.000000001 0.000000001 1000000000000000000000000000000 1000000000000000000000000000000)"
         );
     }
@@ -376,7 +427,7 @@ mod tests {
                 .width(5e-7)
                 .period(1e-6),
         )
-        .spice_line("Vkt1");
+        .spice_line("Vkt1", 1e-9);
         assert_eq!(
             line,
             "Vkt1 clk 0 PULSE(0 3.3 0 0.000000001 0.000000001 0.0000005 0.000001)"
@@ -386,19 +437,21 @@ mod tests {
     #[test]
     fn sin_renders_with_default_delay() {
         assert_eq!(
-            TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3)).spice_line("Vkt1"),
+            TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3))
+                .spice_line("Vkt1", 1e-9),
             "Vkt1 vin 0 SIN(0 1 1000 0)"
         );
     }
 
     #[test]
     fn inject_numbers_tran_sources() {
-        let deck = inject(
+        let deck = inject_tran(
             "* net",
             &[
                 TranSource::sin("a", Sin::new(0.0, 1.0, 1e3)),
                 TranSource::sin("b", Sin::new(0.0, 2.0, 1e3)),
             ],
+            1e-9,
         );
         assert_eq!(
             deck,
@@ -409,14 +462,39 @@ mod tests {
     #[test]
     fn dc_source_renders_a_constant() {
         let source = TranSource::dc("vcc", 9.0);
-        assert_eq!(source.spice_line("Vkt1"), "Vkt1 vcc 0 dc 9");
+        assert_eq!(source.spice_line("Vkt1", 1e-9), "Vkt1 vcc 0 dc 9");
+    }
+
+    #[test]
+    fn a_kick_carries_no_dc_and_follows_the_print_step() {
+        let deck =
+            inject_tran("* net", &[TranSource::kick("tank", 1e-6)], 1e-9);
+        assert_eq!(
+            deck,
+            "* net\nIkt1 tank 0 PULSE(0 0.000001 0.000000001 0.000000001 0.000000001 0.00000001 1000000000000000000000000000000)"
+        );
+    }
+
+    #[test]
+    fn mixed_sources_keep_unique_names() {
+        let deck = inject_tran(
+            "* net",
+            &[TranSource::dc("vcc", 9.0), TranSource::kick("tank", 1e-6)],
+            1e-9,
+        );
+        let names: Vec<&str> = deck
+            .lines()
+            .skip(1)
+            .map(|line| line.split(' ').next().expect("element name"))
+            .collect();
+        assert_eq!(names, ["Vkt1", "Ikt2"]);
     }
 
     #[test]
     fn a_rail_carries_its_noise() {
         let source = TranSource::noisy_dc("vcc", 9.0, 1e-3);
         assert_eq!(
-            source.spice_line_sampled("Vkt1", 1e-9),
+            source.spice_line("Vkt1", 1e-9),
             "Vkt1 vcc 0 dc 9 trnoise(0.001 0.000000001 0 0)"
         );
     }
@@ -424,19 +502,15 @@ mod tests {
     #[test]
     fn an_ideal_rail_carries_none() {
         let source = TranSource::dc("vcc", 9.0);
-        assert_eq!(source.spice_line_sampled("Vkt1", 1e-9), "Vkt1 vcc 0 dc 9");
+        assert_eq!(source.spice_line("Vkt1", 1e-9), "Vkt1 vcc 0 dc 9");
     }
 
     #[test]
-    fn a_transient_function_is_never_sampled() {
-        // ngspice silently drops the PULSE if trnoise sits beside it,
-        // so only a rail can be noisy and nothing else is touched.
-        let source = TranSource::pulse("vin", Pulse::step(0.0, 1.0));
-        let plain = source.spice_line("Vkt1");
-        assert_eq!(source.spice_line_sampled("Vkt1", 1e-9), plain);
+    fn only_a_rail_carries_noise() {
+        let pulse = TranSource::pulse("vin", Pulse::step(0.0, 1.0));
+        assert!(!pulse.spice_line("Vkt1", 1e-9).contains("trnoise"));
 
-        let source = TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3));
-        let plain = source.spice_line("Vkt1");
-        assert_eq!(source.spice_line_sampled("Vkt1", 1e-9), plain);
+        let sin = TranSource::sin("vin", Sin::new(0.0, 1.0, 1e3));
+        assert!(!sin.spice_line("Vkt1", 1e-9).contains("trnoise"));
     }
 }

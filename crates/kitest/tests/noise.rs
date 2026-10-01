@@ -1,9 +1,7 @@
-//! Supply noise is what starts a circuit that has to start itself.
+//! Rail noise as an excitation, and how far it gets.
 //!
-//! A passive tank has no gain, so nothing but the rail's noise can
-//! excite it. That makes it the one circuit here where an ideal rail
-//! and a noisy one give different answers, which is what pins the
-//! mechanism down.
+//! A passive tank has no gain, so an ideal rail leaves it dead and a
+//! noisy one rings it. Decoupling puts a low-pass between the two.
 
 use std::f64::consts::PI;
 
