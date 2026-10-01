@@ -44,6 +44,9 @@ graph TD
     E --> G[Interactive probing]
     A --> H[GUI integration]
     D --> F
+    A --> I[Beyond one board]
+    E --> I
+    F --> I
 ```
 
 ## Intent from the schematic
@@ -93,6 +96,15 @@ The test should contain the design and the intent, and nothing else.
 - Diagnostics as a first-class surface. A failed assertion needs the
   spectrum, or the waveform, or the search the runner performed. An
   opaque failure is worse than no test.
+- A scope viewer for probe waveforms: zoom, cursors, and measurement
+  readouts computed by kitest's own analysis, so the numbers shown match
+  the numbers asserted. egui_plot underneath, as a standalone crate
+  published separately with measurements supplied by the caller.
+- An interactive mode: `kitest` in a KiCad project asks which net and
+  what it should do, runs, and saves the result as a test. The analysis
+  follows from the probes, never from a menu.
+- An install check for `ngspice` and `kicad-cli`, so a missing tool is
+  a clear first message rather than a spawn error.
 
 ## Reference design
 
@@ -112,12 +124,12 @@ The one architectural change that is certain. Both firmware co-simulation
 and interactive probing need a simulation that can be advanced, read and
 perturbed, rather than run to completion and parsed.
 
-- `libngspice` in place of the `ngspice -b` subprocess, behind the
-  existing `Backend` seam. Batch stays for everything that does not need
-  stepping.
-- Gate: linking `libngspice` links GPL code, where the subprocess
-  boundary currently keeps kitest's licensing independent. Decide
-  deliberately before starting.
+- A second `Backend` driving `ngspice -p` over a pipe: `.tran` declared
+  in the deck, `step` to advance, `alter` to perturb. Batch stays for
+  everything that does not need stepping.
+- Settled in `notes/open-questions.md`: indexed reads of
+  `v(node)[length-1]`, 0.588 ms per step, read and alter, and no
+  `libngspice`, so ngspice's GPL stays behind the process boundary.
 
 ## Firmware in the loop
 
@@ -144,6 +156,51 @@ small.
 - A run trigger inside the editor, which is the one thing that cannot be
   built today.
 
+## Beyond one board
+
+Plants and other boards are the same mechanism: something joined to the
+design at named connector pins, with each side's nets prefixed so full
+net names stay unique. Vendor silicon is a different problem, solved at
+the part rather than the connector. Ordered easiest first.
+
+- Plants: reusable behavioural models attached at a connector, such as a
+  BLDC motor (phase R and L, back-EMF from speed and rotor angle,
+  mechanics as behavioural sources) on an ESC's motor connector, a
+  battery, a load, a thermal mass. Plants too complex for SPICE run
+  beside ngspice through stepped simulation.
+- Multi-board projects: a workspace file, like a Cargo workspace, naming
+  the boards and mapping connector pins between them, with the cable as
+  a model (straight or mirrored, R and L or a transmission line) and a
+  shared ground. Workspace conditions live there, never a second home
+  for a board's own.
+- Vendor silicon: never simulate the chip, verify the board's
+  obligations to it. A contract file per part number, beside the model
+  libraries, lists supply ranges and sequencing, strap pins and when
+  they are sampled, reset timing, required external parts such as RSET,
+  and crystal requirements, with IBIS for the I/O buffers. Whether a
+  link comes up belongs to firmware in the loop, with the part as a
+  register stub. The hard part is writing contracts, not checking them:
+  a shared, human-reviewed contract library is the goal.
+- An optional LLM tool that drafts a contract from a datasheet, outside
+  the core so kitest never depends on a model provider. Every value
+  carries its page and a verbatim quote, and a mechanical check confirms
+  the quote is in the PDF. Contract pins are checked against the KiCad
+  symbol's. A draft stays marked as one until a person reviews it, and a
+  run on a draft says so. Local models are supported, since vendor
+  datasheets are often under NDA. Accuracy is measured against
+  hand-written contracts for parts with public datasheets.
+- Behavioural models for parts whose vendor model is encrypted or will
+  not run in ngspice, common for TI power parts. One agent extracts a
+  cited spec, a second builds the model from the spec alone, and a check
+  compares the model against the datasheet's typical-performance curves,
+  which the builder never saw. The same clean-room split can turn an
+  unencrypted but non-redistributable vendor model into one the registry
+  can carry, where that model's licence permits reading it for this.
+  Never decrypt a vendor model.
+- A `dialect` field on model library entries (`pspice`, `ltspice`),
+  translated with ngspice's include-only compatibility modes so kitest's
+  own deck stays native ngspice.
+
 ## Far horizon
 
 - Corners and Monte Carlo over component tolerance.
@@ -153,6 +210,13 @@ small.
   load capacitance check stops being an estimate.
 - A closed loop for automated iteration: propose a value, run, read,
   adjust. The headless surface is the substrate for it.
+- A shared registry of contracts, model cards and plants, keyed by
+  manufacturer and part number and versioned by datasheet and silicon
+  revision. It starts as a reviewed git repository, as KiCad's libraries
+  do, before any hosted service. Each entry records its source and review
+  state, with vendor-published entries marked as such. Entries derived
+  from NDA datasheets cannot be published, and vendor SPICE models often
+  forbid redistribution, so each entry carries its licence.
 
 ## Standing obligations
 
