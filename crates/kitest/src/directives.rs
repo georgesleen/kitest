@@ -20,9 +20,8 @@ impl Tran {
 
     /// Discard output before `start` seconds.
     ///
-    /// The simulation still runs from zero, so the circuit behaves the
-    /// same and only the saved output is trimmed. Use this to keep an
-    /// oscillator's startup out of a steady-state measurement.
+    /// The simulation still runs from zero. Only the saved output is
+    /// trimmed.
     pub fn start(self, start: f64) -> Self {
         Self { start, ..self }
     }

@@ -24,11 +24,6 @@ impl<'a> Signal<'a> {
     }
 
     /// The strongest sinusoid in this waveform.
-    ///
-    /// Resamples onto a uniform grid, removes the DC level, applies a
-    /// Hann window, and takes the largest peak of the discrete Fourier
-    /// transform. Only meaningful for a waveform that oscillates; the
-    /// amplitude is how to tell.
     pub fn dominant_tone(&self) -> Tone {
         super::spectrum::dominant_tone(self)
     }

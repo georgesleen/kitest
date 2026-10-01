@@ -8,10 +8,6 @@ use crate::{Frequency, Signal, Tone, Voltage};
 
 /// A window function, with the corrections its shape forces on a
 /// measurement.
-///
-/// A window is three coupled things: the taper itself, the mean it
-/// leaves behind, and the shape of its main lobe. All three must agree,
-/// so a new variant cannot be added without filling in every match.
 #[derive(Debug, Clone, Copy)]
 enum Window {
     Hann,
@@ -35,10 +31,6 @@ impl Window {
     }
 
     /// Main lobe relative to its peak, `offset` bins from a bin centre.
-    ///
-    /// A tone between bins sits on the flank of its own lobe, so the
-    /// peak magnitude under-reads by this factor. Hann loses up to 15%
-    /// at half a bin.
     fn lobe(self, offset: f64) -> f64 {
         if offset == 0.0 {
             return 1.0;
@@ -134,10 +126,6 @@ impl Waveform {
     }
 
     /// Window the samples and transform them to magnitudes.
-    ///
-    /// The window is applied here rather than in its own step so that
-    /// the spectrum always knows which one produced it, and cannot be
-    /// corrected with the wrong one.
     fn spectrum(mut self, window: Window) -> Spectrum {
         let samples = self.values.len();
         for (k, value) in self.values.iter_mut().enumerate() {
@@ -209,10 +197,6 @@ impl Spectrum {
     }
 
     /// Amplitude of the peak at `bin`, zero to peak.
-    ///
-    /// Undoes three things: the transform's length, the window's mean,
-    /// and the lobe flank the tone sits on when it falls between bins.
-    /// The factor of two is the negative half of the real spectrum.
     fn amplitude(&self, bin: usize, offset: f64) -> f64 {
         let gain = self.window.coherent_gain() * self.window.lobe(offset);
         2.0 * self.magnitudes[bin] / (self.samples as f64 * gain)
