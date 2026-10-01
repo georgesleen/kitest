@@ -1,18 +1,68 @@
-//! Exporting a KiCad schematic to a SPICE netlist via `kicad-cli`.
+//! Reading KiCad schematics through `kicad-cli` and the schematic files.
 
-use std::path::Path;
+mod design;
+mod element;
+mod netlist;
+mod node;
+mod pins;
+mod rail;
+mod schematic;
+mod sexpr;
+mod supplies;
+mod value;
+mod xml;
+
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+pub use design::{
+    Component, Design, LibraryId, LibraryPart, LibraryPin, Net, Node, PinKind,
+};
+pub use netlist::{Netlist, NetlistError};
+use sexpr::SexpError;
+pub use supplies::{
+    Corner, Power, Rail, RailKind, SupplyError, SupplyProblem, VoltageOrigin,
+};
 
 /// SPICE deck terminator; kitest works in bodies, so the exporter strips it.
 const SPICE_END: &str = ".end";
 
 /// Export the schematic at `sch` to a SPICE netlist body (no trailing `.end`).
 pub fn export_netlist(sch: &Path) -> Result<String, KicadError> {
+    let netlist = run_export(sch, "spice")?;
+    Ok(strip_end(&netlist).to_owned())
+}
+
+/// Export the schematic at `sch` as kitest reads it.
+pub fn export_design(sch: &Path) -> Result<Design, KicadError> {
+    let xml::Export {
+        mut components,
+        parts,
+        nets,
+    } = xml::parse(&run_export(sch, "kicadxml")?)?;
+    let facts = schematic::read(sch)?;
+
+    for component in &mut components {
+        component.excluded_from_sim =
+            facts.excluded_from_sim.contains(&component.reference);
+        component.dnp = facts.dnp.contains(&component.reference);
+    }
+
+    Ok(Design {
+        components,
+        parts,
+        nets,
+        rails: facts.rails.into_iter().collect(),
+    })
+}
+
+/// Run `kicad-cli sch export netlist` on `sch` in `format` and return the file.
+fn run_export(sch: &Path, format: &str) -> Result<String, KicadError> {
     let dir = tempfile::tempdir().map_err(KicadError::Io)?;
-    let out_path = dir.path().join("netlist.cir");
+    let out_path = dir.path().join("netlist");
 
     let output = Command::new("kicad-cli")
-        .args(["sch", "export", "netlist", "--format", "spice"])
+        .args(["sch", "export", "netlist", "--format", format])
         .arg("-o")
         .arg(&out_path)
         .arg(sch)
@@ -26,8 +76,7 @@ pub fn export_netlist(sch: &Path) -> Result<String, KicadError> {
         });
     }
 
-    let netlist = std::fs::read_to_string(&out_path).map_err(KicadError::Io)?;
-    Ok(strip_end(&netlist).to_owned())
+    std::fs::read_to_string(&out_path).map_err(KicadError::Io)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,6 +89,26 @@ pub enum KicadError {
 
     #[error("kicad-cli exited with status {code:?}:\n{stderr}")]
     Exec { code: Option<i32>, stderr: String },
+
+    #[error("kicadxml export is not valid XML")]
+    Xml(#[source] roxmltree::Error),
+
+    #[error("kicadxml export is malformed: {0}")]
+    MalformedExport(String),
+
+    #[error("could not read schematic {path}")]
+    ReadSchematic {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("schematic {path} is malformed")]
+    Schematic {
+        path: PathBuf,
+        #[source]
+        source: SexpError,
+    },
 }
 
 /// Drop a trailing `.end` line so the result is a netlist body.
