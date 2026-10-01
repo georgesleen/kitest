@@ -13,6 +13,7 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          pythonEnv = pkgs.python3.withPackages (ps: [ ps.matplotlib ]);
         in
         {
           default = pkgs.mkShell {
@@ -28,7 +29,7 @@
               # lldb-dap: the DAP adapter helix drives for `:debug-start`.
               lldb
               ngspice
-              python3
+              pythonEnv
               uv
               kicad-small
             ];
@@ -38,6 +39,11 @@
             # `uv pip install` would then target the immutable /nix/store and fail.
             # The venv target pins the interpreter per-command instead.)
             env.UV_PYTHON_DOWNLOADS = "never";
+
+            # matplotlib backs kitest.scope. Taken from nixpkgs, where its
+            # native libraries already resolve, and put on PYTHONPATH so the
+            # uv venv sees it without a binary wheel.
+            env.PYTHONPATH = "${pythonEnv}/${pkgs.python3.sitePackages}";
           };
         }
       );

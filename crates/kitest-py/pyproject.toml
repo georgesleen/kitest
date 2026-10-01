@@ -7,6 +7,9 @@ name = "kitest"
 version = "0.0.0"
 requires-python = ">=3.9"
 
+[project.optional-dependencies]
+plot = ["matplotlib"]
+
 [dependency-groups]
 dev = ["pytest", "maturin"]
 
