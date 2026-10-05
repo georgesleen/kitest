@@ -111,3 +111,15 @@ fn the_colpitts_without_a_vcc_voltage_says_what_to_add() {
     assert!(message.contains("Q1 (2N3904) pin C"), "{message}");
     assert!(message.contains("\"VCC\" = <volts>"), "{message}");
 }
+
+#[test]
+fn the_drawn_colpitts_probe_is_read_by_name() {
+    let design =
+        export_design(Path::new(&format!("{COLPITTS}/colpitts.kicad_sch")))
+            .unwrap();
+    let probe = design.probe("COLPITTS_OUT").expect("probe read");
+
+    assert_eq!(probe.reference(), "PRB1");
+    assert_eq!(probe.net().name, "/OUT");
+    assert_eq!(probe.expect(), None);
+}

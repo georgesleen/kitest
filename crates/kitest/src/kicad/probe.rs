@@ -74,17 +74,17 @@ fn is_probe(component: &Component) -> bool {
 }
 
 impl Design {
-    /// Every simulated probe in the schematic, in component order; probes
-    /// excluded from simulation or marked DNP are left out.
+    /// Every probe in the schematic, in component order; probes marked DNP
+    /// are left out. Exclusion from simulation is ignored: the probe
+    /// symbol is always excluded, because it is annotation, not circuit.
     pub fn probes(&self) -> Result<Vec<Probe<'_>>, ProbeError> {
         let mut probes = Vec::new();
         let mut problems = Vec::new();
-        let simulated = self.components.iter().filter(|component| {
-            is_probe(component)
-                && !component.excluded_from_sim
-                && !component.dnp
-        });
-        for component in simulated {
+        let placed = self
+            .components
+            .iter()
+            .filter(|component| is_probe(component) && !component.dnp);
+        for component in placed {
             match self.probe_from(component) {
                 Ok(probe) => probes.push(probe),
                 Err(problem) => problems.push(problem),
@@ -406,19 +406,14 @@ mod tests {
     }
 
     #[test]
-    fn probes_excluded_from_simulation_or_not_placed_are_left_out() {
-        let mut excluded = probe("PRB2", "VOUT", None);
+    fn probes_excluded_from_simulation_are_read_and_dnp_left_out() {
+        let mut excluded = probe("PRB1", "VOUT", Some("/OUT"));
         excluded.excluded_from_sim = true;
-        let mut unplaced = probe("PRB3", "VOUT", None);
+        let mut unplaced = probe("PRB2", "VOUT", None);
         unplaced.dnp = true;
-        let design = design(vec![
-            resistor("R1", "/OUT"),
-            probe("PRB1", "VOUT", Some("/OUT")),
-            excluded,
-            unplaced,
-        ]);
+        let design = design(vec![resistor("R1", "/OUT"), excluded, unplaced]);
 
-        let probes = design.probes().expect("skipped probes cause no errors");
+        let probes = design.probes().expect("DNP probe causes no errors");
         assert_eq!(probes.len(), 1);
         assert_eq!(probes[0].reference(), "PRB1");
     }
