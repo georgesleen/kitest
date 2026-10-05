@@ -1,10 +1,14 @@
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use num_complex::Complex64;
 use pyo3::prelude::*;
 
 use ::kitest::{
-    Ac, AcSupply, Backend, DcSupply, Design, Frequency, ModelLibrary, Ngspice,
-    OperatingPoint, Probe, Pulse, Response, Signal, Sin, Spectra, Sweep,
-    Tolerance, Tone, Tran, TranSource, Transient, Voltage,
+    Ac, AcSupply, Backend, Config, Corner, DcSupply, Design, Frequency,
+    ModelLibrary, Ngspice, OperatingPoint, Power, Probe, Pulse, Rail, RailKind,
+    Response, Signal, Sin, Spectra, Sweep, Tolerance, Tone, Tran, TranSource,
+    Transient, Voltage, VoltageOrigin,
 };
 
 /// Returns the kitest version string.
@@ -16,7 +20,7 @@ fn version() -> &'static str {
 /// Read the KiCad schematic at `sch` as kitest sees it.
 #[pyfunction]
 fn export_design(sch: &str) -> PyResult<PyDesign> {
-    ::kitest::export_design(std::path::Path::new(sch))
+    ::kitest::export_design(Path::new(sch))
         .map(|inner| PyDesign { inner })
         .map_err(runtime_error)
 }
@@ -39,7 +43,7 @@ impl PyDesign {
     fn netlist(&self, libraries: Vec<String>) -> PyResult<PyNetlist> {
         let mut loaded = libraries
             .iter()
-            .map(|path| ModelLibrary::load(std::path::Path::new(path)))
+            .map(|path| ModelLibrary::load(Path::new(path)))
             .collect::<Result<Vec<_>, _>>()
             .map_err(runtime_error)?;
         loaded.push(ModelLibrary::bundled());
@@ -60,6 +64,192 @@ impl PyDesign {
     fn probe(&self, name: &str) -> PyResult<PyProbe> {
         let probe = self.inner.probe(name).map_err(runtime_error)?;
         Ok(PyProbe::from(&probe))
+    }
+
+    /// Resolve power rails against voltages declared by full net name, as
+    /// in `kitest.toml`'s `[supplies]`.
+    #[pyo3(signature = (supplies = BTreeMap::new()))]
+    fn power(&self, supplies: BTreeMap<String, Vec<f64>>) -> PyResult<PyPower> {
+        let inner = self.inner.power(&supplies).map_err(runtime_error)?;
+        Ok(PyPower { inner })
+    }
+}
+
+#[pyclass(name = "Config")]
+struct PyConfig {
+    inner: Config,
+}
+
+#[pymethods]
+impl PyConfig {
+    /// Load `kitest.toml` from `directory`, or an empty config if it has none.
+    #[staticmethod]
+    fn for_project(directory: &str) -> PyResult<Self> {
+        let inner =
+            Config::for_project(Path::new(directory)).map_err(runtime_error)?;
+        Ok(Self { inner })
+    }
+
+    /// Load the config file at `path`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let inner = Config::load(Path::new(path)).map_err(runtime_error)?;
+        Ok(Self { inner })
+    }
+
+    /// Voltages for each rail by full net name.
+    fn supplies(&self) -> BTreeMap<String, Vec<f64>> {
+        self.inner.supplies.clone()
+    }
+
+    /// Project model library paths, resolved against the config's directory.
+    fn model_libraries(&self) -> Vec<String> {
+        self.inner
+            .model_libraries
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect()
+    }
+}
+
+#[pyclass(name = "Power")]
+struct PyPower {
+    inner: Power,
+}
+
+#[pymethods]
+impl PyPower {
+    /// Every resolved rail, sorted by full net name.
+    fn rails(&self) -> Vec<PyRail> {
+        self.inner.rails().iter().map(PyRail::from).collect()
+    }
+
+    /// Every combination of sourced rail voltages.
+    fn corners(&self) -> Vec<PyCorner> {
+        self.inner
+            .corners()
+            .map(|corner| PyCorner::from(&corner))
+            .collect()
+    }
+}
+
+#[pyclass(name = "Rail")]
+struct PyRail {
+    net: String,
+    kind: &'static str,
+    voltages: Vec<f64>,
+    origin: Option<&'static str>,
+    driven_by: Vec<String>,
+}
+
+impl From<&Rail> for PyRail {
+    fn from(rail: &Rail) -> Self {
+        let (kind, voltages, origin, driven_by) = match rail.kind() {
+            RailKind::Driven { by } => ("driven", Vec::new(), None, by.clone()),
+            RailKind::Source { voltages, origin } => {
+                let origin = match origin {
+                    VoltageOrigin::Declared => "declared",
+                    VoltageOrigin::Inferred => "inferred",
+                };
+                ("source", voltages.clone(), Some(origin), Vec::new())
+            }
+            RailKind::Ground => ("ground", Vec::new(), None, Vec::new()),
+        };
+        Self {
+            net: rail.net().to_owned(),
+            kind,
+            voltages,
+            origin,
+            driven_by,
+        }
+    }
+}
+
+#[pymethods]
+impl PyRail {
+    /// The rail's full net name.
+    fn net(&self) -> String {
+        self.net.clone()
+    }
+
+    /// How the rail is powered: `"driven"`, `"source"` or `"ground"`.
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    /// One voltage per corner for a source rail; empty otherwise.
+    fn voltages(&self) -> Vec<f64> {
+        self.voltages.clone()
+    }
+
+    /// `"declared"` or `"inferred"` for a source rail; `None` otherwise.
+    fn origin(&self) -> Option<&'static str> {
+        self.origin
+    }
+
+    /// The pins driving a driven rail; empty otherwise.
+    fn driven_by(&self) -> Vec<String> {
+        self.driven_by.clone()
+    }
+}
+
+#[pyclass(name = "Corner")]
+struct PyCorner {
+    voltages: Vec<(String, f64)>,
+    dc_supplies: Vec<DcSupply>,
+    tran_sources: Vec<TranSource>,
+    ac_supplies: Vec<AcSupply>,
+}
+
+impl From<&Corner<'_>> for PyCorner {
+    fn from(corner: &Corner<'_>) -> Self {
+        Self {
+            voltages: corner
+                .voltages()
+                .map(|(node, volts)| (node.to_owned(), volts))
+                .collect(),
+            dc_supplies: corner.dc_supplies(),
+            tran_sources: corner.tran_sources(),
+            ac_supplies: corner.ac_supplies(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyCorner {
+    /// The SPICE node and voltage of every source kitest adds.
+    fn voltages(&self) -> Vec<(String, f64)> {
+        self.voltages.clone()
+    }
+
+    /// Supplies for `Ngspice.run_op`.
+    fn dc_supplies(&self) -> Vec<PyDcSupply> {
+        self.dc_supplies
+            .iter()
+            .map(|inner| PyDcSupply {
+                inner: inner.clone(),
+            })
+            .collect()
+    }
+
+    /// Constant sources for `Ngspice.run_tran`.
+    fn tran_sources(&self) -> Vec<PyTranSource> {
+        self.tran_sources
+            .iter()
+            .map(|inner| PyTranSource {
+                inner: inner.clone(),
+            })
+            .collect()
+    }
+
+    /// Biased supplies with no AC stimulus, for `Ngspice.run_ac`.
+    fn ac_supplies(&self) -> Vec<PyAcSupply> {
+        self.ac_supplies
+            .iter()
+            .map(|inner| PyAcSupply {
+                inner: inner.clone(),
+            })
+            .collect()
     }
 }
 
@@ -640,6 +830,10 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDesign>()?;
     m.add_class::<PyNetlist>()?;
     m.add_class::<PyProbe>()?;
+    m.add_class::<PyConfig>()?;
+    m.add_class::<PyPower>()?;
+    m.add_class::<PyRail>()?;
+    m.add_class::<PyCorner>()?;
     m.add_class::<PyDcSupply>()?;
     m.add_class::<PyAcSupply>()?;
     m.add_class::<PyTranSource>()?;
