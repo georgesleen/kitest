@@ -27,7 +27,7 @@ def test_colpitts_probe_by_name():
 
 def test_unknown_probe_lists_known_names():
     design = kitest.export_design(str(COLPITTS_SCH))
-    with pytest.raises(RuntimeError, match='probes are "COLPITTS_OUT"'):
+    with pytest.raises(kitest.ProbeError, match='probes are "COLPITTS_OUT"'):
         design.probe("OSC")
 
 
@@ -65,5 +65,14 @@ def test_colpitts_rails_say_how_each_is_powered():
 
 def test_colpitts_without_vcc_says_what_to_add():
     design = kitest.export_design(str(COLPITTS_SCH))
-    with pytest.raises(RuntimeError, match='"VCC" = <volts>'):
+    with pytest.raises(kitest.SupplyError, match='"VCC" = <volts>'):
         design.power()
+
+
+def test_bad_config_reports_where_toml_broke(tmp_path):
+    (tmp_path / "kitest.toml").write_text("[supplies]\nVCC = \n")
+    with pytest.raises(kitest.ConfigError) as error:
+        kitest.Config.for_project(str(tmp_path))
+    message = str(error.value)
+    assert "is not a valid kitest config" in message
+    assert "line 2" in message

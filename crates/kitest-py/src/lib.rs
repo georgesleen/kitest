@@ -22,7 +22,7 @@ fn version() -> &'static str {
 fn export_design(sch: &str) -> PyResult<PyDesign> {
     ::kitest::export_design(Path::new(sch))
         .map(|inner| PyDesign { inner })
-        .map_err(runtime_error)
+        .map_err(raise::<KicadError>)
 }
 
 #[pyclass(name = "Design")]
@@ -45,9 +45,10 @@ impl PyDesign {
             .iter()
             .map(|path| ModelLibrary::load(Path::new(path)))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(runtime_error)?;
+            .map_err(raise::<ModelError>)?;
         loaded.push(ModelLibrary::bundled());
-        let netlist = self.inner.netlist(&loaded).map_err(runtime_error)?;
+        let netlist =
+            self.inner.netlist(&loaded).map_err(raise::<NetlistError>)?;
         Ok(PyNetlist {
             text: netlist.text,
             defaulted: netlist.defaulted,
@@ -56,13 +57,13 @@ impl PyDesign {
 
     /// Every probe in the schematic, in component order.
     fn probes(&self) -> PyResult<Vec<PyProbe>> {
-        let probes = self.inner.probes().map_err(runtime_error)?;
+        let probes = self.inner.probes().map_err(raise::<ProbeError>)?;
         Ok(probes.iter().map(PyProbe::from).collect())
     }
 
     /// The probe named `name`.
     fn probe(&self, name: &str) -> PyResult<PyProbe> {
-        let probe = self.inner.probe(name).map_err(runtime_error)?;
+        let probe = self.inner.probe(name).map_err(raise::<ProbeError>)?;
         Ok(PyProbe::from(&probe))
     }
 
@@ -70,7 +71,8 @@ impl PyDesign {
     /// in `kitest.toml`'s `[supplies]`.
     #[pyo3(signature = (supplies = BTreeMap::new()))]
     fn power(&self, supplies: BTreeMap<String, Vec<f64>>) -> PyResult<PyPower> {
-        let inner = self.inner.power(&supplies).map_err(runtime_error)?;
+        let inner =
+            self.inner.power(&supplies).map_err(raise::<SupplyError>)?;
         Ok(PyPower { inner })
     }
 }
@@ -85,15 +87,16 @@ impl PyConfig {
     /// Load `kitest.toml` from `directory`, or an empty config if it has none.
     #[staticmethod]
     fn for_project(directory: &str) -> PyResult<Self> {
-        let inner =
-            Config::for_project(Path::new(directory)).map_err(runtime_error)?;
+        let inner = Config::for_project(Path::new(directory))
+            .map_err(raise::<ConfigError>)?;
         Ok(Self { inner })
     }
 
     /// Load the config file at `path`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let inner = Config::load(Path::new(path)).map_err(runtime_error)?;
+        let inner =
+            Config::load(Path::new(path)).map_err(raise::<ConfigError>)?;
         Ok(Self { inner })
     }
 
@@ -461,7 +464,7 @@ impl PyNgspice {
         let op = self
             .inner
             .run_op(netlist, &supplies)
-            .map_err(runtime_error)?;
+            .map_err(raise::<SimulationError>)?;
         Ok(PyOperatingPoint { inner: op })
     }
 
@@ -476,7 +479,7 @@ impl PyNgspice {
         let spectra = self
             .inner
             .run_ac(netlist, &supplies, params.inner)
-            .map_err(runtime_error)?;
+            .map_err(raise::<SimulationError>)?;
         Ok(PySpectra { inner: spectra })
     }
 
@@ -491,13 +494,70 @@ impl PyNgspice {
         let transient = self
             .inner
             .run_tran(netlist, &sources, params.inner)
-            .map_err(runtime_error)?;
+            .map_err(raise::<SimulationError>)?;
         Ok(PyTransient { inner: transient })
     }
 }
 
-fn runtime_error(e: impl std::fmt::Display) -> PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+pyo3::create_exception!(
+    kitest,
+    KitestError,
+    pyo3::exceptions::PyException,
+    "Base class of every error kitest raises."
+);
+pyo3::create_exception!(
+    kitest,
+    KicadError,
+    KitestError,
+    "KiCad export failed."
+);
+pyo3::create_exception!(
+    kitest,
+    ConfigError,
+    KitestError,
+    "kitest.toml is invalid."
+);
+pyo3::create_exception!(
+    kitest,
+    ModelError,
+    KitestError,
+    "A model library is invalid."
+);
+pyo3::create_exception!(
+    kitest,
+    NetlistError,
+    KitestError,
+    "A design cannot be turned into a netlist."
+);
+pyo3::create_exception!(
+    kitest,
+    SupplyError,
+    KitestError,
+    "Power rails cannot be resolved."
+);
+pyo3::create_exception!(
+    kitest,
+    ProbeError,
+    KitestError,
+    "A probe cannot be read."
+);
+pyo3::create_exception!(
+    kitest,
+    SimulationError,
+    KitestError,
+    "The simulator failed."
+);
+
+/// Raise `error` as exception `E`, with every underlying cause appended.
+fn raise<E: pyo3::PyTypeInfo>(error: impl std::error::Error) -> PyErr {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(source) = cause {
+        message.push_str("\ncaused by: ");
+        message.push_str(&source.to_string());
+        cause = source.source();
+    }
+    PyErr::new::<E, _>(message)
 }
 
 fn missing_node(node: &str, known: &[&str]) -> PyErr {
@@ -852,5 +912,14 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySignal>()?;
     m.add_class::<PyResponse>()?;
     m.add_class::<PyTolerance>()?;
+    let py = m.py();
+    m.add("KitestError", py.get_type::<KitestError>())?;
+    m.add("KicadError", py.get_type::<KicadError>())?;
+    m.add("ConfigError", py.get_type::<ConfigError>())?;
+    m.add("ModelError", py.get_type::<ModelError>())?;
+    m.add("NetlistError", py.get_type::<NetlistError>())?;
+    m.add("SupplyError", py.get_type::<SupplyError>())?;
+    m.add("ProbeError", py.get_type::<ProbeError>())?;
+    m.add("SimulationError", py.get_type::<SimulationError>())?;
     Ok(())
 }
