@@ -8,9 +8,14 @@ publish = false
 
 [lib]
 name = "kitest_py"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+doc = false
 
 [dependencies]
 kitest = { path = "../kitest" }
 num-complex = "0.4"
-pyo3 = { version = "0.29", features = ["extension-module", "num-complex"] }
+pyo3 = { version = "0.29", features = ["num-complex"] }
+pyo3-stub-gen = "0.23"

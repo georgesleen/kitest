@@ -1,6 +1,6 @@
 NIX_FILES := $(shell find . -name '*.nix' -not -path './.git/*')
 
-.PHONY: fmt fmt-check lint test pytest build venv
+.PHONY: fmt fmt-check lint test pytest build venv stubs
 
 fmt:
 	nixfmt $(NIX_FILES)
@@ -32,3 +32,7 @@ pytest: venv
 
 build:
 	cargo build
+
+# Regenerate crates/kitest-py/python/kitest/_kitest/__init__.pyi from the binding.
+stubs:
+	cargo run -q -p kitest-py --bin stub_gen

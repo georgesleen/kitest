@@ -3,6 +3,10 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use pyo3::prelude::*;
+use pyo3_stub_gen::derive::{
+    gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pyfunction,
+    gen_stub_pymethods,
+};
 
 use ::kitest::{
     Ac, AcSupply, Backend, Config, Corner, DcSupply, Design, Frequency,
@@ -12,12 +16,14 @@ use ::kitest::{
 };
 
 /// Returns the kitest version string.
+#[gen_stub_pyfunction(module = "kitest._kitest")]
 #[pyfunction]
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
 /// Read the KiCad schematic at `sch` as kitest sees it.
+#[gen_stub_pyfunction(module = "kitest._kitest")]
 #[pyfunction]
 fn export_design(sch: &str) -> PyResult<PyDesign> {
     ::kitest::export_design(Path::new(sch))
@@ -25,11 +31,13 @@ fn export_design(sch: &str) -> PyResult<PyDesign> {
         .map_err(raise::<KicadError>)
 }
 
-#[pyclass(name = "Design")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Design")]
 struct PyDesign {
     inner: Design,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyDesign {
     /// Net names created by power symbols, sorted.
@@ -77,11 +85,13 @@ impl PyDesign {
     }
 }
 
-#[pyclass(name = "Config")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Config")]
 struct PyConfig {
     inner: Config,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyConfig {
     /// Load `kitest.toml` from `directory`, or an empty config if it has none.
@@ -115,11 +125,13 @@ impl PyConfig {
     }
 }
 
-#[pyclass(name = "Power")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Power")]
 struct PyPower {
     inner: Power,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyPower {
     /// Every resolved rail, sorted by full net name.
@@ -136,7 +148,8 @@ impl PyPower {
     }
 }
 
-#[pyclass(name = "Rail")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Rail")]
 struct PyRail {
     net: String,
     kind: &'static str,
@@ -168,6 +181,7 @@ impl From<&Rail> for PyRail {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyRail {
     /// The rail's full net name.
@@ -176,6 +190,10 @@ impl PyRail {
     }
 
     /// How the rail is powered: `"driven"`, `"source"` or `"ground"`.
+    #[gen_stub(override_return_type(
+        type_repr = "typing.Literal['driven', 'source', 'ground']",
+        imports = ("typing")
+    ))]
     fn kind(&self) -> &'static str {
         self.kind
     }
@@ -186,6 +204,10 @@ impl PyRail {
     }
 
     /// `"declared"` or `"inferred"` for a source rail; `None` otherwise.
+    #[gen_stub(override_return_type(
+        type_repr = "typing.Literal['declared', 'inferred'] | None",
+        imports = ("typing")
+    ))]
     fn origin(&self) -> Option<&'static str> {
         self.origin
     }
@@ -196,7 +218,8 @@ impl PyRail {
     }
 }
 
-#[pyclass(name = "Corner")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Corner")]
 struct PyCorner {
     voltages: Vec<(String, f64)>,
     dc_supplies: Vec<DcSupply>,
@@ -218,6 +241,7 @@ impl From<&Corner<'_>> for PyCorner {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyCorner {
     /// The SPICE node and voltage of every source kitest adds.
@@ -256,12 +280,14 @@ impl PyCorner {
     }
 }
 
-#[pyclass(name = "Netlist")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Netlist")]
 struct PyNetlist {
     text: String,
     defaulted: Vec<String>,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyNetlist {
     /// The netlist body to pass to `Ngspice`.
@@ -275,7 +301,8 @@ impl PyNetlist {
     }
 }
 
-#[pyclass(name = "Probe")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Probe")]
 struct PyProbe {
     name: String,
     net: String,
@@ -294,6 +321,7 @@ impl From<&Probe<'_>> for PyProbe {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyProbe {
     /// The probe's Value, or its net's name when Value is empty.
@@ -317,12 +345,14 @@ impl PyProbe {
     }
 }
 
-#[pyclass(name = "DcSupply", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "DcSupply", from_py_object)]
 #[derive(Clone)]
 struct PyDcSupply {
     inner: DcSupply,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyDcSupply {
     #[new]
@@ -333,12 +363,14 @@ impl PyDcSupply {
     }
 }
 
-#[pyclass(name = "Tolerance", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Tolerance", from_py_object)]
 #[derive(Clone)]
 struct PyTolerance {
     inner: Tolerance,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyTolerance {
     /// An absolute tolerance of `v`.
@@ -367,12 +399,14 @@ impl PyTolerance {
 
 /// The outcome of an assertion: truthy when it passed, and printed as what
 /// was measured against what was expected.
-#[pyclass(name = "Check")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Check")]
 struct PyCheck {
     passed: bool,
     message: String,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyCheck {
     fn __bool__(&self) -> bool {
@@ -434,11 +468,13 @@ fn si(value: f64, unit: &str) -> String {
     format!("{digits} {prefix}{unit}").trim_end().to_owned()
 }
 
-#[pyclass(name = "Frequency")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Frequency")]
 struct PyFrequency {
     inner: Frequency,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyFrequency {
     /// The value in hertz.
@@ -457,11 +493,13 @@ impl PyFrequency {
     }
 }
 
-#[pyclass(name = "Tone")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Tone")]
 struct PyTone {
     inner: Tone,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyTone {
     /// The frequency of the dominant sinusoid.
@@ -484,11 +522,13 @@ impl PyTone {
     }
 }
 
-#[pyclass(name = "Voltage")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Voltage")]
 struct PyVoltage {
     inner: Voltage,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyVoltage {
     /// The value in volts.
@@ -507,11 +547,13 @@ impl PyVoltage {
     }
 }
 
-#[pyclass(name = "OperatingPoint")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "OperatingPoint")]
 struct PyOperatingPoint {
     inner: OperatingPoint,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyOperatingPoint {
     fn node(&self, node: &str) -> PyResult<PyVoltage> {
@@ -526,11 +568,13 @@ impl PyOperatingPoint {
     }
 }
 
-#[pyclass(name = "Ngspice")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Ngspice")]
 struct PyNgspice {
     inner: Ngspice,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyNgspice {
     #[new]
@@ -585,54 +629,55 @@ impl PyNgspice {
     }
 }
 
-pyo3::create_exception!(
-    kitest,
+/// A Python exception in `kitest._kitest` whose stub names its base by module.
+macro_rules! exception {
+    ($name:ident, $base:ty, $doc:expr) => {
+        pyo3::create_exception!(kitest._kitest, $name, $base, $doc);
+
+        impl pyo3_stub_gen::PyStubType for $name {
+            fn type_output() -> pyo3_stub_gen::TypeInfo {
+                pyo3_stub_gen::TypeInfo::locally_defined(
+                    stringify!($name),
+                    "kitest._kitest".into(),
+                )
+            }
+        }
+
+        pyo3_stub_gen::inventory::submit! {
+            pyo3_stub_gen::type_info::PyClassInfo {
+                pyclass_name: stringify!($name),
+                struct_id: std::any::TypeId::of::<$name>,
+                getters: &[],
+                setters: &[],
+                module: Some("kitest._kitest"),
+                doc: $doc,
+                bases: &[|| <$base as pyo3_stub_gen::PyStubType>::type_output()],
+                has_eq: false,
+                has_ord: false,
+                has_hash: false,
+                has_str: false,
+                subclass: true,
+            }
+        }
+    };
+}
+
+exception!(
     KitestError,
     pyo3::exceptions::PyException,
     "Base class of every error kitest raises."
 );
-pyo3::create_exception!(
-    kitest,
-    KicadError,
-    KitestError,
-    "KiCad export failed."
-);
-pyo3::create_exception!(
-    kitest,
-    ConfigError,
-    KitestError,
-    "kitest.toml is invalid."
-);
-pyo3::create_exception!(
-    kitest,
-    ModelError,
-    KitestError,
-    "A model library is invalid."
-);
-pyo3::create_exception!(
-    kitest,
+exception!(KicadError, KitestError, "KiCad export failed.");
+exception!(ConfigError, KitestError, "kitest.toml is invalid.");
+exception!(ModelError, KitestError, "A model library is invalid.");
+exception!(
     NetlistError,
     KitestError,
     "A design cannot be turned into a netlist."
 );
-pyo3::create_exception!(
-    kitest,
-    SupplyError,
-    KitestError,
-    "Power rails cannot be resolved."
-);
-pyo3::create_exception!(
-    kitest,
-    ProbeError,
-    KitestError,
-    "A probe cannot be read."
-);
-pyo3::create_exception!(
-    kitest,
-    SimulationError,
-    KitestError,
-    "The simulator failed."
-);
+exception!(SupplyError, KitestError, "Power rails cannot be resolved.");
+exception!(ProbeError, KitestError, "A probe cannot be read.");
+exception!(SimulationError, KitestError, "The simulator failed.");
 
 /// Raise `error` as exception `E`, with every underlying cause appended.
 fn raise<E: pyo3::PyTypeInfo>(error: impl std::error::Error) -> PyErr {
@@ -657,12 +702,14 @@ fn empty_response() -> PyErr {
     pyo3::exceptions::PyValueError::new_err("response has no frequency points")
 }
 
-#[pyclass(name = "AcSupply", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "AcSupply", from_py_object)]
 #[derive(Clone)]
 struct PyAcSupply {
     inner: AcSupply,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyAcSupply {
     #[new]
@@ -685,12 +732,14 @@ impl PyAcSupply {
     }
 }
 
-#[pyclass(name = "Pulse", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Pulse", from_py_object)]
 #[derive(Clone)]
 struct PyPulse {
     inner: Pulse,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyPulse {
     #[staticmethod]
@@ -732,12 +781,14 @@ impl PyPulse {
     }
 }
 
-#[pyclass(name = "Sin", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Sin", from_py_object)]
 #[derive(Clone)]
 struct PySin {
     inner: Sin,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PySin {
     #[new]
@@ -755,12 +806,14 @@ impl PySin {
     }
 }
 
-#[pyclass(name = "TranSource", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "TranSource", from_py_object)]
 #[derive(Clone)]
 struct PyTranSource {
     inner: TranSource,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyTranSource {
     /// Hold `node` at a constant `volts`.
@@ -793,9 +846,25 @@ impl PyTranSource {
             inner: TranSource::sin(node, sin.inner),
         }
     }
+
+    /// Inject a brief current impulse of `amps` into `node`, to start an
+    /// oscillator without moving its operating point.
+    #[staticmethod]
+    fn kick(node: &str, amps: f64) -> Self {
+        Self {
+            inner: TranSource::kick(node, amps),
+        }
+    }
 }
 
-#[pyclass(name = "Sweep", eq, eq_int, from_py_object)]
+#[gen_stub_pyclass_enum]
+#[pyclass(
+    module = "kitest._kitest",
+    name = "Sweep",
+    eq,
+    eq_int,
+    from_py_object
+)]
 #[derive(Clone, PartialEq)]
 enum PySweep {
     Dec,
@@ -813,12 +882,14 @@ impl PySweep {
     }
 }
 
-#[pyclass(name = "Ac", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Ac", from_py_object)]
 #[derive(Clone)]
 struct PyAc {
     inner: Ac,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyAc {
     #[new]
@@ -835,12 +906,14 @@ impl PyAc {
     }
 }
 
-#[pyclass(name = "Tran", from_py_object)]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Tran", from_py_object)]
 #[derive(Clone)]
 struct PyTran {
     inner: Tran,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyTran {
     #[new]
@@ -859,12 +932,14 @@ impl PyTran {
     }
 }
 
-#[pyclass(name = "Signal")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Signal")]
 struct PySignal {
     time: Vec<f64>,
     values: Vec<f64>,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PySignal {
     fn time(&self) -> Vec<f64> {
@@ -921,12 +996,14 @@ impl PySignal {
     }
 }
 
-#[pyclass(name = "Response")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Response")]
 struct PyResponse {
     frequency: Vec<f64>,
     values: Vec<Complex64>,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyResponse {
     fn frequency(&self) -> Vec<f64> {
@@ -950,11 +1027,13 @@ impl PyResponse {
     }
 }
 
-#[pyclass(name = "Transient")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Transient")]
 struct PyTransient {
     inner: Transient,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyTransient {
     fn node(&self, node: &str) -> PyResult<PySignal> {
@@ -972,11 +1051,13 @@ impl PyTransient {
     }
 }
 
-#[pyclass(name = "Spectra")]
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Spectra")]
 struct PySpectra {
     inner: Spectra,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PySpectra {
     fn node(&self, node: &str) -> PyResult<PyResponse> {
@@ -1036,3 +1117,5 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SimulationError", py.get_type::<SimulationError>())?;
     Ok(())
 }
+
+pyo3_stub_gen::define_stub_info_gatherer!(stub_info);

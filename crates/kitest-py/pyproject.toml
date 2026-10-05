@@ -16,3 +16,4 @@ dev = ["pytest", "maturin"]
 [tool.maturin]
 module-name = "kitest._kitest"
 python-source = "python"
+features = ["pyo3/extension-module"]
