@@ -2,9 +2,9 @@ use num_complex::Complex64;
 use pyo3::prelude::*;
 
 use ::kitest::{
-    Ac, AcSupply, Backend, DcSupply, Frequency, Ngspice, OperatingPoint,
-    Pulse, Response, Signal, Sin, Spectra, Sweep, Tolerance, Tone, Tran,
-    TranSource, Transient, Voltage,
+    Ac, AcSupply, Backend, DcSupply, Design, Frequency, ModelLibrary, Ngspice,
+    OperatingPoint, Probe, Pulse, Response, Signal, Sin, Spectra, Sweep,
+    Tolerance, Tone, Tran, TranSource, Transient, Voltage,
 };
 
 /// Returns the kitest version string.
@@ -13,10 +13,115 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Export a KiCad schematic to a SPICE netlist body.
+/// Read the KiCad schematic at `sch` as kitest sees it.
 #[pyfunction]
-fn export_netlist(sch: &str) -> PyResult<String> {
-    ::kitest::export_netlist(std::path::Path::new(sch)).map_err(runtime_error)
+fn export_design(sch: &str) -> PyResult<PyDesign> {
+    ::kitest::export_design(std::path::Path::new(sch))
+        .map(|inner| PyDesign { inner })
+        .map_err(runtime_error)
+}
+
+#[pyclass(name = "Design")]
+struct PyDesign {
+    inner: Design,
+}
+
+#[pymethods]
+impl PyDesign {
+    /// Net names created by power symbols, sorted.
+    fn rails(&self) -> Vec<String> {
+        self.inner.rails.clone()
+    }
+
+    /// The SPICE netlist, binding models from the library files at
+    /// `libraries` first and the bundled library after them.
+    #[pyo3(signature = (libraries = Vec::new()))]
+    fn netlist(&self, libraries: Vec<String>) -> PyResult<PyNetlist> {
+        let mut loaded = libraries
+            .iter()
+            .map(|path| ModelLibrary::load(std::path::Path::new(path)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(runtime_error)?;
+        loaded.push(ModelLibrary::bundled());
+        let netlist = self.inner.netlist(&loaded).map_err(runtime_error)?;
+        Ok(PyNetlist {
+            text: netlist.text,
+            defaulted: netlist.defaulted,
+        })
+    }
+
+    /// Every probe in the schematic, in component order.
+    fn probes(&self) -> PyResult<Vec<PyProbe>> {
+        let probes = self.inner.probes().map_err(runtime_error)?;
+        Ok(probes.iter().map(PyProbe::from).collect())
+    }
+
+    /// The probe named `name`.
+    fn probe(&self, name: &str) -> PyResult<PyProbe> {
+        let probe = self.inner.probe(name).map_err(runtime_error)?;
+        Ok(PyProbe::from(&probe))
+    }
+}
+
+#[pyclass(name = "Netlist")]
+struct PyNetlist {
+    text: String,
+    defaulted: Vec<String>,
+}
+
+#[pymethods]
+impl PyNetlist {
+    /// The netlist body to pass to `Ngspice`.
+    fn text(&self) -> String {
+        self.text.clone()
+    }
+
+    /// Parts simulated on a default model because no library covers them.
+    fn defaulted(&self) -> Vec<String> {
+        self.defaulted.clone()
+    }
+}
+
+#[pyclass(name = "Probe")]
+struct PyProbe {
+    name: String,
+    net: String,
+    expect: Option<String>,
+    reference: String,
+}
+
+impl From<&Probe<'_>> for PyProbe {
+    fn from(probe: &Probe<'_>) -> Self {
+        Self {
+            name: probe.name().to_owned(),
+            net: probe.net().name.clone(),
+            expect: probe.expect().map(str::to_owned),
+            reference: probe.reference().to_owned(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyProbe {
+    /// The probe's Value, or its net's name when Value is empty.
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// The name of the net the probe sits on.
+    fn net(&self) -> String {
+        self.net.clone()
+    }
+
+    /// The probe's Expect field, if it has one.
+    fn expect(&self) -> Option<String> {
+        self.expect.clone()
+    }
+
+    /// The probe's reference designator, such as `PRB1`.
+    fn reference(&self) -> String {
+        self.reference.clone()
+    }
 }
 
 #[pyclass(name = "DcSupply", from_py_object)]
@@ -531,7 +636,10 @@ impl PySpectra {
 #[pymodule]
 fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
-    m.add_function(wrap_pyfunction!(export_netlist, m)?)?;
+    m.add_function(wrap_pyfunction!(export_design, m)?)?;
+    m.add_class::<PyDesign>()?;
+    m.add_class::<PyNetlist>()?;
+    m.add_class::<PyProbe>()?;
     m.add_class::<PyDcSupply>()?;
     m.add_class::<PyAcSupply>()?;
     m.add_class::<PyTranSource>()?;
