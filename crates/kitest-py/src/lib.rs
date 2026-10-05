@@ -356,6 +356,82 @@ impl PyTolerance {
             inner: Tolerance::percent(p),
         }
     }
+
+    fn __repr__(&self) -> String {
+        match self.inner {
+            Tolerance::Abs(v) => format!("Tolerance.abs({v})"),
+            Tolerance::Percent(p) => format!("Tolerance.percent({p})"),
+        }
+    }
+}
+
+/// The outcome of an assertion: truthy when it passed, and printed as what
+/// was measured against what was expected.
+#[pyclass(name = "Check")]
+struct PyCheck {
+    passed: bool,
+    message: String,
+}
+
+#[pymethods]
+impl PyCheck {
+    fn __bool__(&self) -> bool {
+        self.passed
+    }
+
+    fn __str__(&self) -> String {
+        self.message.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        let outcome = if self.passed { "pass" } else { "fail" };
+        format!("Check({outcome}: {})", self.message)
+    }
+}
+
+/// A check that `measured` is within `tolerance` of `expected`.
+fn closeness(
+    passed: bool,
+    measured: f64,
+    expected: f64,
+    tolerance: Tolerance,
+    unit: &str,
+) -> PyCheck {
+    let relation = if passed { "within" } else { "outside" };
+    PyCheck {
+        passed,
+        message: format!(
+            "{} is {} from {}, {relation} {}",
+            si(measured, unit),
+            si((measured - expected).abs(), unit),
+            si(expected, unit),
+            describe_tolerance(tolerance, expected, unit),
+        ),
+    }
+}
+
+/// `tolerance` around `target`, as `±25 mV` or `±1% (25 mV)`.
+fn describe_tolerance(tolerance: Tolerance, target: f64, unit: &str) -> String {
+    match tolerance {
+        Tolerance::Abs(v) => format!("±{}", si(v, unit)),
+        Tolerance::Percent(p) => {
+            format!("±{p}% ({})", si(tolerance.band(target), unit))
+        }
+    }
+}
+
+/// `value` with an SI prefix and up to four decimals, such as `10.1496 MHz`.
+fn si(value: f64, unit: &str) -> String {
+    const PREFIXES: [&str; 9] = ["p", "n", "µ", "m", "", "k", "M", "G", "T"];
+    if value == 0.0 || !value.is_finite() {
+        return format!("{value} {unit}").trim_end().to_owned();
+    }
+    let power = (value.abs().log10() / 3.0).floor().clamp(-4.0, 4.0);
+    let scaled = value / 1000f64.powf(power);
+    let digits = format!("{scaled:.4}");
+    let digits = digits.trim_end_matches('0').trim_end_matches('.');
+    let prefix = PREFIXES[(power + 4.0) as usize];
+    format!("{digits} {prefix}{unit}").trim_end().to_owned()
 }
 
 #[pyclass(name = "Frequency")]
@@ -370,9 +446,14 @@ impl PyFrequency {
         self.inner.hertz()
     }
 
-    /// True if the frequency is within `tolerance` of `expected`.
-    fn near(&self, expected: f64, tolerance: PyTolerance) -> bool {
-        self.inner.near(expected, tolerance.inner)
+    /// Whether the frequency is within `tolerance` of `expected`.
+    fn near(&self, expected: f64, tolerance: PyTolerance) -> PyCheck {
+        let passed = self.inner.near(expected, tolerance.inner);
+        closeness(passed, self.inner.hertz(), expected, tolerance.inner, "Hz")
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Frequency({})", si(self.inner.hertz(), "Hz"))
     }
 }
 
@@ -415,9 +496,14 @@ impl PyVoltage {
         self.inner.volts()
     }
 
-    /// True if the voltage is within `tolerance` of `expected`.
-    fn near(&self, expected: f64, tolerance: PyTolerance) -> bool {
-        self.inner.near(expected, tolerance.inner)
+    /// Whether the voltage is within `tolerance` of `expected`.
+    fn near(&self, expected: f64, tolerance: PyTolerance) -> PyCheck {
+        let passed = self.inner.near(expected, tolerance.inner);
+        closeness(passed, self.inner.volts(), expected, tolerance.inner, "V")
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Voltage({})", si(self.inner.volts(), "V"))
     }
 }
 
@@ -784,17 +870,37 @@ impl PySignal {
         self.values.clone()
     }
 
+    /// Whether the signal stays within `tolerance` of `target` over the last
+    /// `window` seconds.
     fn settles_to(
         &self,
         target: f64,
         tolerance: PyTolerance,
         window: f64,
-    ) -> bool {
-        Signal::new(&self.time, &self.values).settles_to(
-            target,
-            tolerance.inner,
-            window,
-        )
+    ) -> PyCheck {
+        let signal = Signal::new(&self.time, &self.values);
+        let passed = signal.settles_to(target, tolerance.inner, window);
+        let tolerance = describe_tolerance(tolerance.inner, target, "V");
+        let message = match signal.worst_deviation(target, window) {
+            Some(worst) => format!(
+                "over the last {}, the signal strays up to {} from {}, {} {tolerance}",
+                si(window, "s"),
+                si(worst, "V"),
+                si(target, "V"),
+                if passed { "within" } else { "outside" },
+            ),
+            None => {
+                let span = match (self.time.first(), self.time.last()) {
+                    (Some(first), Some(last)) => si(last - first, "s"),
+                    _ => "0 s".to_owned(),
+                };
+                format!(
+                    "the signal spans {span}, shorter than the {} window",
+                    si(window, "s")
+                )
+            }
+        };
+        PyCheck { passed, message }
     }
 
     fn overshoot(&self, target: f64) -> f64 {
@@ -912,6 +1018,7 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySignal>()?;
     m.add_class::<PyResponse>()?;
     m.add_class::<PyTolerance>()?;
+    m.add_class::<PyCheck>()?;
     let py = m.py();
     m.add("KitestError", py.get_type::<KitestError>())?;
     m.add("KicadError", py.get_type::<KicadError>())?;

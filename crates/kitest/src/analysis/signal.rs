@@ -35,20 +35,24 @@ impl<'a> Signal<'a> {
         tolerance: Tolerance,
         window: f64,
     ) -> bool {
-        let band = tolerance.band(target);
-        let (Some(&first), Some(&last)) = (self.time.first(), self.time.last())
-        else {
-            return false;
-        };
+        self.worst_deviation(target, window)
+            .is_some_and(|deviation| deviation <= tolerance.band(target))
+    }
+
+    /// The largest distance from `target` over the last `window` seconds, or
+    /// `None` when the signal is shorter than `window`.
+    pub fn worst_deviation(&self, target: f64, window: f64) -> Option<f64> {
+        let (&first, &last) = (self.time.first()?, self.time.last()?);
         if last - first < window {
-            return false;
+            return None;
         }
         let start = last - window;
         self.time
             .iter()
             .zip(self.values)
             .filter(|(t, _)| **t >= start)
-            .all(|(_, v)| (*v - target).abs() <= band)
+            .map(|(_, v)| (*v - target).abs())
+            .reduce(f64::max)
     }
 
     /// Peak value above `target`, as a fraction of `target`.
@@ -91,6 +95,15 @@ mod tests {
     fn rejects_empty_signal() {
         let s = Signal::new(&[], &[]);
         assert!(!s.settles_to(1.0, Tolerance::abs(0.05), 1.0));
+    }
+
+    #[test]
+    fn worst_deviation_is_the_largest_miss_inside_the_window() {
+        let values = [5.0, 0.6, 1.1, 0.9, 1.05];
+        let s = Signal::new(&TIME, &values);
+        let worst = s.worst_deviation(1.0, 2.0).expect("window fits");
+        assert!((worst - 0.1).abs() < 1e-9, "{worst}");
+        assert_eq!(s.worst_deviation(1.0, 10.0), None);
     }
 
     #[test]

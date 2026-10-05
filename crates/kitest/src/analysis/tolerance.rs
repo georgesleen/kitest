@@ -21,7 +21,7 @@ impl Tolerance {
     }
 
     /// The allowed distance from `target`: absolute as-is, percent of `|target|`.
-    pub(crate) fn band(self, target: f64) -> f64 {
+    pub fn band(self, target: f64) -> f64 {
         match self {
             Self::Abs(v) => v,
             Self::Percent(p) => p / 100.0 * target.abs(),
