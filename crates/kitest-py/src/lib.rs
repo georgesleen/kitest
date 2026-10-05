@@ -694,6 +694,7 @@ struct PyPulse {
 #[pymethods]
 impl PyPulse {
     #[staticmethod]
+    #[pyo3(signature = (*, low, high))]
     fn step(low: f64, high: f64) -> Self {
         Self {
             inner: Pulse::step(low, high),
@@ -740,6 +741,7 @@ struct PySin {
 #[pymethods]
 impl PySin {
     #[new]
+    #[pyo3(signature = (*, offset, amplitude, freq))]
     fn new(offset: f64, amplitude: f64, freq: f64) -> Self {
         Self {
             inner: Sin::new(offset, amplitude, freq),
@@ -771,6 +773,7 @@ impl PyTranSource {
 
     /// Hold `node` at `volts`, with `noise` volts RMS of supply noise.
     #[staticmethod]
+    #[pyo3(signature = (node, volts, *, noise))]
     fn noisy_dc(node: &str, volts: f64, noise: f64) -> Self {
         Self {
             inner: TranSource::noisy_dc(node, volts, noise),
@@ -819,6 +822,7 @@ struct PyAc {
 #[pymethods]
 impl PyAc {
     #[new]
+    #[pyo3(signature = (sweep, *, points, fstart, fstop))]
     fn new(sweep: PySweep, points: u32, fstart: f64, fstop: f64) -> Self {
         Self {
             inner: Ac {
@@ -840,6 +844,7 @@ struct PyTran {
 #[pymethods]
 impl PyTran {
     #[new]
+    #[pyo3(signature = (*, step, stop))]
     fn new(step: f64, stop: f64) -> Self {
         Self {
             inner: Tran::new(step, stop),
@@ -872,6 +877,7 @@ impl PySignal {
 
     /// Whether the signal stays within `tolerance` of `target` over the last
     /// `window` seconds.
+    #[pyo3(signature = (target, tolerance, *, window))]
     fn settles_to(
         &self,
         target: f64,

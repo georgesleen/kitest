@@ -8,8 +8,8 @@ def run():
     ng = kitest.Ngspice()
     return ng.run_tran(
         RC,
-        [kitest.TranSource.pulse("vin", kitest.Pulse.step(0.0, 1.0))],
-        kitest.Tran(1e-5, 5e-3),
+        [kitest.TranSource.pulse("vin", kitest.Pulse.step(low=0.0, high=1.0))],
+        kitest.Tran(step=1e-5, stop=5e-3),
     )
 
 

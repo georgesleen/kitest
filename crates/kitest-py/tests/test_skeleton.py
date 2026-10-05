@@ -44,7 +44,7 @@ def test_colpitts_oscillates_from_its_project_config():
         .run_tran(
             netlist.text(),
             corners[0].tran_sources(),
-            kitest.Tran(1e-9, 25e-6).start(10e-6),
+            kitest.Tran(step=1e-9, stop=25e-6).start(10e-6),
         )
         .node("/OUT")
         .dominant_tone()

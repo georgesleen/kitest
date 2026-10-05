@@ -11,7 +11,7 @@ def test_run_ac_lowpass_cutoff():
     sp = ng.run_ac(
         RC_LOWPASS,
         [kitest.AcSupply("vin")],
-        kitest.Ac(kitest.Sweep.Dec, 100, 1.0, 1e6),
+        kitest.Ac(kitest.Sweep.Dec, points=100, fstart=1.0, fstop=1e6),
     )
     resp = sp.node("vout")
     fc = 1.0 / (2.0 * math.pi * 1e3 * 1e-6)
