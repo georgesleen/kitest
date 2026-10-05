@@ -207,7 +207,7 @@ mod tests {
     <comp ref="PRB1">
       <value>Probe</value>
       <fields>
-        <field name="Kitest.Expect">2.5V</field>
+        <field name="Expect">2.5V</field>
       </fields>
       <libsource lib="kitest" part="Probe"/>
     </comp>
@@ -256,7 +256,7 @@ mod tests {
         let probe = &netlist.components[1];
         assert_eq!(probe.library.library, "kitest");
         assert_eq!(probe.library.part, "Probe");
-        assert_eq!(probe.fields["Kitest.Expect"], "2.5V");
+        assert_eq!(probe.fields["Expect"], "2.5V");
     }
 
     #[test]

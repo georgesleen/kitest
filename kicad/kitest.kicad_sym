@@ -23,16 +23,7 @@
 				)
 			)
 		)
-		(property "Value" "Probe"
-			(at 1.651 4.064 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Name" ""
+		(property "Value" ""
 			(at 1.651 4.064 0)
 			(effects
 				(font

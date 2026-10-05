@@ -16,8 +16,9 @@ pub use config::{CONFIG_FILE, Config, ConfigError};
 pub use directives::{Ac, Sweep, Tran};
 pub use kicad::{
     Component, Corner, Design, KicadError, LibraryId, LibraryPart, LibraryPin,
-    Net, Netlist, NetlistError, Node, PinKind, Power, Rail, RailKind,
-    SupplyError, SupplyProblem, VoltageOrigin, export_design, export_netlist,
+    Net, Netlist, NetlistError, Node, PinKind, Power, Probe, ProbeError,
+    ProbeProblem, Rail, RailKind, SupplyError, SupplyProblem, VoltageOrigin,
+    export_design, export_netlist,
 };
 pub use models::{ModelEntry, ModelError, ModelKind, ModelLibrary};
 pub use sim::{Backend, Ngspice, NgspiceError};

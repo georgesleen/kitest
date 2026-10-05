@@ -5,6 +5,7 @@ mod element;
 mod netlist;
 mod node;
 mod pins;
+mod probe;
 mod rail;
 mod schematic;
 mod sexpr;
@@ -19,6 +20,7 @@ pub use design::{
     Component, Design, LibraryId, LibraryPart, LibraryPin, Net, Node, PinKind,
 };
 pub use netlist::{Netlist, NetlistError};
+pub use probe::{Probe, ProbeError, ProbeProblem};
 use sexpr::SexpError;
 pub use supplies::{
     Corner, Power, Rail, RailKind, SupplyError, SupplyProblem, VoltageOrigin,
