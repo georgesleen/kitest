@@ -24,8 +24,15 @@ const RUN_CYCLES: [f64; 3] = [200.0, 800.0, 3200.0];
 const WINDOW_CYCLES: f64 = 25.0;
 /// Largest change in amplitude between windows still counted as steady.
 const STEADY_CHANGE: f64 = 0.01;
-/// Current impulse into the probe's net that starts every oscillation run.
+/// Current impulse into the probe's net that starts every oscillation run,
+/// before it is sized to the net.
 const KICK_AMPS: f64 = 1e-3;
+/// Largest voltage step a kick may cause before it is scaled down.
+const MAX_KICK_VOLTS: f64 = 0.5;
+/// The step a kick is scaled to when it would exceed `MAX_KICK_VOLTS`.
+const SIZED_KICK_VOLTS: f64 = 0.2;
+/// Cycles after the start in which the kick's step is read.
+const KICK_STEP_CYCLES: f64 = 0.1;
 
 /// One probe's result at one corner.
 #[derive(Debug, Clone, PartialEq)]
@@ -234,16 +241,33 @@ fn check_corner<B: Backend>(
 fn oscillation<B: Backend>(
     backend: &B,
     netlist: &str,
-    mut sources: Vec<TranSource>,
+    sources: Vec<TranSource>,
     net: &Net,
     near: f64,
     within: Tolerance,
 ) -> Result<Check, B::Error> {
-    sources.push(TranSource::kick(&node_name(&net.name), KICK_AMPS));
+    let node = node_name(&net.name);
+    let mut amps = KICK_AMPS;
+    let mut sized = false;
     let mut last = None;
     for cycles in RUN_CYCLES {
         let tran = Tran::new(1.0 / (near * SAMPLES_PER_CYCLE), cycles / near);
-        let result = backend.run_tran(netlist, &sources, tran)?;
+        let run = |amps: f64| {
+            let mut kicked = sources.clone();
+            kicked.push(TranSource::kick(&node, amps));
+            backend.run_tran(netlist, &kicked, tran)
+        };
+        let mut result = run(amps)?;
+        if !sized {
+            sized = true;
+            let step = result
+                .node(&net.name)
+                .map_or(0.0, |signal| kick_step(&signal, near));
+            if step > MAX_KICK_VOLTS {
+                amps *= SIZED_KICK_VOLTS / step;
+                result = run(amps)?;
+            }
+        }
         let Some(signal) = result.node(&net.name) else {
             return Ok(missing(net));
         };
@@ -273,6 +297,22 @@ fn oscillation<B: Backend>(
             )
         },
     ))
+}
+
+/// The largest move away from the starting voltage in the first
+/// `KICK_STEP_CYCLES`, which is the step the kick caused.
+fn kick_step(signal: &Signal<'_>, hertz: f64) -> f64 {
+    let time = signal.time();
+    let values = signal.values();
+    let Some(&start) = values.first() else {
+        return 0.0;
+    };
+    let end = time.first().copied().unwrap_or(0.0) + KICK_STEP_CYCLES / hertz;
+    time.iter()
+        .zip(values)
+        .take_while(|(t, _)| **t <= end)
+        .map(|(_, v)| (v - start).abs())
+        .fold(0.0, f64::max)
 }
 
 /// Amplitudes of the last three windows of a run, oldest first.
@@ -480,5 +520,77 @@ mod tests {
     fn a_growing_or_slowly_decaying_envelope_needs_a_longer_run() {
         assert_eq!(verdict(1.05), None);
         assert_eq!(verdict(0.95), None);
+    }
+
+    /// Ngspice, recording each kick's current and the step it caused on `n`.
+    struct Recording {
+        kicks: std::cell::RefCell<Vec<(String, f64)>>,
+        hertz: f64,
+    }
+
+    impl Backend for Recording {
+        type Error = crate::NgspiceError;
+
+        fn run_op(
+            &self,
+            netlist: &str,
+            supplies: &[crate::DcSupply],
+        ) -> Result<crate::OperatingPoint, Self::Error> {
+            Ngspice::default().run_op(netlist, supplies)
+        }
+
+        fn run_tran(
+            &self,
+            netlist: &str,
+            sources: &[TranSource],
+            params: Tran,
+        ) -> Result<crate::Transient, Self::Error> {
+            let result =
+                Ngspice::default().run_tran(netlist, sources, params)?;
+            let kick = sources
+                .last()
+                .map(|kick| kick.spice_line("Ikt", params.step_seconds()))
+                .unwrap_or_default();
+            let step =
+                kick_step(&result.node("n").expect("n present"), self.hertz);
+            self.kicks.borrow_mut().push((kick, step));
+            Ok(result)
+        }
+
+        fn run_ac(
+            &self,
+            netlist: &str,
+            supplies: &[crate::AcSupply],
+            params: crate::Ac,
+        ) -> Result<crate::Spectra, Self::Error> {
+            Ngspice::default().run_ac(netlist, supplies, params)
+        }
+    }
+
+    #[test]
+    fn a_kick_on_a_high_impedance_net_is_scaled_to_a_small_step() {
+        // 1 mH with 10 pF rings at 1.59 MHz; 1 mA into it steps several volts.
+        let hertz = 1.0 / (std::f64::consts::TAU * (1e-3f64 * 10e-12).sqrt());
+        let backend = Recording {
+            kicks: Default::default(),
+            hertz,
+        };
+        let net = Net {
+            name: "n".into(),
+            nodes: Vec::new(),
+        };
+        oscillation(
+            &backend,
+            "* high impedance tank\nl1 n 0 1m\nc1 n 0 10p\nr1 n 0 1meg\n",
+            Vec::new(),
+            &net,
+            hertz,
+            Tolerance::percent(5.0),
+        )
+        .expect("simulation ran");
+        let kicks = backend.kicks.borrow();
+        assert!(kicks[0].1 > MAX_KICK_VOLTS, "{kicks:?}");
+        let (_, sized) = kicks[1];
+        assert!(sized <= MAX_KICK_VOLTS && sized > 0.05, "{kicks:?}");
     }
 }

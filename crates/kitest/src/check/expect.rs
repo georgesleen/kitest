@@ -1,10 +1,12 @@
 //! Parsing a probe's `Expect` field.
 //!
 //! The field is a single call in the subset of the Python API a probe can
-//! state, such as `oscillates(near=10.4e6, within=percent(5))`. It is parsed,
+//! state, such as `oscillates(near=10.4MHz, within=5%)`. Values read like
+//! KiCad part values, with SI multipliers and optional units. It is parsed,
 //! never evaluated.
 
 use crate::Tolerance;
+use crate::kicad::{Unit, parse_value};
 
 /// What a probe claims about its net.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,11 +33,12 @@ impl ExpectError {
 }
 
 /// The checks a probe can state, with their keywords, for error messages.
-const CHECKS: &str = "dc(near=<volts>, within=<tolerance>) or \
-                      oscillates(near=<hertz>, within=<tolerance>)";
+const CHECKS: &str = "dc(near=3.3V, within=5%) or \
+                      oscillates(near=10.4MHz, within=2%)";
 
 /// The tolerances a check accepts, for error messages.
-const TOLERANCES: &str = "percent(<p>) or abs(<value>)";
+const TOLERANCES: &str = "a percentage such as 5%, an amount such as 100mV, \
+                          percent(5), or abs(100mV)";
 
 /// Parse `text`, which is not empty.
 pub fn parse(text: &str) -> Result<Expectation, ExpectError> {
@@ -56,7 +59,8 @@ struct Call<'a> {
 }
 
 enum Value<'a> {
-    Number(f64),
+    /// A number as written, with any SI multiplier, unit, or `%`.
+    Quantity(&'a str),
     Call(Call<'a>),
 }
 
@@ -114,40 +118,36 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Some(c) if c.is_ascii_alphabetic() => Ok(Value::Call(self.call()?)),
             Some(c) if c.is_ascii_digit() || matches!(c, '-' | '+' | '.') => {
-                self.number().map(Value::Number)
+                Ok(Value::Quantity(self.quantity()))
             }
             _ => Err(self.unexpected("a number or a call")),
         }
     }
 
-    fn number(&mut self) -> Result<f64, ExpectError> {
+    /// A number with whatever multiplier, unit, or `%` follows it, which may
+    /// be separated by one space as in `10.1 MHz`.
+    fn quantity(&mut self) -> &'a str {
         let start = self.at;
-        while let Some(c) = self.peek() {
-            let exponent_sign = matches!(c, '-' | '+')
-                && self.text[start..self.at].ends_with(['e', 'E']);
-            let leading_sign = matches!(c, '-' | '+') && self.at == start;
-            if c.is_ascii_digit()
-                || matches!(c, '.' | 'e' | 'E' | '_')
-                || exponent_sign
-                || leading_sign
-            {
-                self.at += c.len_utf8();
-            } else {
-                break;
-            }
+        self.take_while(is_quantity_char);
+        let joined = self.at;
+        self.skip_space();
+        let suffix = self.at;
+        self.take_while(is_quantity_char);
+        let follows = self.peek();
+        let is_unit = self.at > suffix
+            && self.text[suffix..self.at]
+                .starts_with(|c: char| !c.is_ascii_digit())
+            && !matches!(follows, Some('=' | '('));
+        if !is_unit {
+            self.at = joined;
         }
-        let token = &self.text[start..self.at];
-        token
-            .replace('_', "")
-            .parse::<f64>()
-            .ok()
-            .filter(|value| value.is_finite())
-            .ok_or_else(|| {
-                ExpectError::new(format!(
-                    "{token:?} is not a number, in {}",
-                    self.text
-                ))
-            })
+        &self.text[start..self.at]
+    }
+
+    fn take_while(&mut self, keep: impl Fn(char) -> bool) {
+        while let Some(c) = self.peek().filter(|c| keep(*c)) {
+            self.at += c.len_utf8();
+        }
     }
 
     /// A name followed by `=`, consumed; otherwise nothing is consumed.
@@ -224,10 +224,20 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Characters a quantity such as `-2.5e-3`, `10.1MHz` or `5%` is made of.
+fn is_quantity_char(c: char) -> bool {
+    !c.is_whitespace() && !matches!(c, ',' | '(' | ')' | '=')
+}
+
 fn expectation(call: &Call<'_>) -> Result<Expectation, ExpectError> {
-    let build = match call.name {
-        "dc" => |near, within| Expectation::Dc { near, within },
-        "oscillates" => |near, within| Expectation::Oscillates { near, within },
+    let (unit, build): (Unit, fn(f64, Tolerance) -> Expectation) = match call
+        .name
+    {
+        "dc" => (Unit::Volt, |near, within| Expectation::Dc { near, within }),
+        "oscillates" => (Unit::Hertz, |near, within| Expectation::Oscillates {
+            near,
+            within,
+        }),
         other => {
             return Err(ExpectError::new(format!(
                 "unknown check {other:?}; a probe can state {CHECKS}"
@@ -244,8 +254,8 @@ fn expectation(call: &Call<'_>) -> Result<Expectation, ExpectError> {
     let mut within = None;
     for (keyword, value) in &call.keywords {
         match *keyword {
-            "near" => near = Some(number(name, keyword, value)?),
-            "within" => within = Some(tolerance(name, value)?),
+            "near" => near = Some(number(name, keyword, value, unit)?),
+            "within" => within = Some(tolerance(name, value, unit)?),
             other => {
                 return Err(ExpectError::new(format!(
                     "{name} takes near= and within=, not {other}="
@@ -257,9 +267,7 @@ fn expectation(call: &Call<'_>) -> Result<Expectation, ExpectError> {
         ExpectError::new(format!("{name} needs near=, the expected value"))
     })?;
     let within = within.ok_or_else(|| {
-        ExpectError::new(format!(
-            "{name} needs within=, such as within=percent(5)"
-        ))
+        ExpectError::new(format!("{name} needs within=, such as within=5%"))
     })?;
     Ok(build(near, within))
 }
@@ -268,41 +276,79 @@ fn number(
     name: &str,
     keyword: &str,
     value: &Value<'_>,
+    unit: Unit,
 ) -> Result<f64, ExpectError> {
     match value {
-        Value::Number(number) => Ok(*number),
+        Value::Quantity(text) => amount(text, unit),
         Value::Call(call) => Err(ExpectError::new(format!(
-            "{name}'s {keyword}= is a number, not {}(...)",
+            "{name}'s {keyword}= is a {}, not {}(...)",
+            unit.describe(),
             call.name
         ))),
     }
 }
 
-fn tolerance(name: &str, value: &Value<'_>) -> Result<Tolerance, ExpectError> {
-    let Value::Call(call) = value else {
-        return Err(ExpectError::new(format!(
-            "{name}'s within= is {TOLERANCES}, not a bare number"
-        )));
+/// `text` as a value in `unit`, signed, with any SI multiplier.
+fn amount(text: &str, unit: Unit) -> Result<f64, ExpectError> {
+    let (sign, magnitude) = match text.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, text.strip_prefix('+').unwrap_or(text)),
     };
-    let make = match call.name {
-        "percent" => Tolerance::percent,
-        "abs" => Tolerance::abs,
-        other => {
-            return Err(ExpectError::new(format!(
-                "unknown tolerance {other:?}; within= is {TOLERANCES}"
-            )));
+    parse_value(&magnitude.replace('_', ""), unit)
+        .filter(|value| value.is_finite())
+        .map(|value| sign * value)
+        .ok_or_else(|| {
+            ExpectError::new(format!("{text:?} is not a {}", unit.describe()))
+        })
+}
+
+fn tolerance(
+    name: &str,
+    value: &Value<'_>,
+    unit: Unit,
+) -> Result<Tolerance, ExpectError> {
+    let tolerance = match value {
+        Value::Quantity(text) => match text.strip_suffix('%') {
+            Some(percent) => Tolerance::percent(amount(percent.trim(), unit)?),
+            None if text.replace('_', "").parse::<f64>().is_ok() => {
+                return Err(ExpectError::new(format!(
+                    "{name}'s within={text} could be a percentage or an amount; \
+                     write {text}% for a percentage, or give a {}",
+                    unit.describe()
+                )));
+            }
+            None => Tolerance::abs(amount(text, unit)?),
+        },
+        Value::Call(call) => {
+            let make = match call.name {
+                "percent" => Tolerance::percent,
+                "abs" => Tolerance::abs,
+                other => {
+                    return Err(ExpectError::new(format!(
+                        "unknown tolerance {other:?}; within= is {TOLERANCES}"
+                    )));
+                }
+            };
+            match (call.positional.as_slice(), call.keywords.is_empty()) {
+                ([Value::Quantity(text)], true) => make(amount(text, unit)?),
+                _ => {
+                    return Err(ExpectError::new(format!(
+                        "{} takes one number, such as {}(5)",
+                        call.name, call.name
+                    )));
+                }
+            }
         }
     };
-    match (call.positional.as_slice(), call.keywords.is_empty()) {
-        ([Value::Number(amount)], true) if *amount > 0.0 => Ok(make(*amount)),
-        ([Value::Number(_)], true) => Err(ExpectError::new(format!(
-            "{}(...) must be positive",
-            call.name
-        ))),
-        _ => Err(ExpectError::new(format!(
-            "{} takes one number, such as {}(5)",
-            call.name, call.name
-        ))),
+    let size = match tolerance {
+        Tolerance::Abs(size) | Tolerance::Percent(size) => size,
+    };
+    if size > 0.0 {
+        Ok(tolerance)
+    } else {
+        Err(ExpectError::new(format!(
+            "{name}'s within= must be positive"
+        )))
     }
 }
 
@@ -333,10 +379,36 @@ mod tests {
     }
 
     #[test]
+    fn reads_values_the_way_kicad_writes_them() {
+        assert_eq!(
+            parse("oscillates(near=10.4MHz, within=2%)"),
+            Ok(Expectation::Oscillates {
+                near: 10.4e6,
+                within: Tolerance::Percent(2.0)
+            })
+        );
+        assert_eq!(
+            parse("oscillates(near=32.768 kHz, within=50Hz)"),
+            Ok(Expectation::Oscillates {
+                near: 32.768e3,
+                within: Tolerance::Abs(50.0)
+            })
+        );
+        assert_eq!(
+            parse("dc(near=3V3, within=100mV)"),
+            Ok(Expectation::Dc {
+                near: 3.3,
+                within: Tolerance::Abs(0.1)
+            })
+        );
+        assert!(message("dc(near=10MHz, within=1%)").contains("not a voltage"));
+    }
+
+    #[test]
     fn unknown_check_lists_the_ones_that_exist() {
         let text = message("osc(near=1, within=percent(1))");
         assert!(text.contains("\"osc\""), "{text}");
-        assert!(text.contains("oscillates(near=<hertz>"), "{text}");
+        assert!(text.contains("oscillates(near=10.4MHz"), "{text}");
     }
 
     #[test]
@@ -354,7 +426,10 @@ mod tests {
 
     #[test]
     fn tolerance_must_be_a_positive_percent_or_abs() {
-        assert!(message("dc(near=1, within=5)").contains("not a bare number"));
+        assert!(
+            message("dc(near=1, within=5)")
+                .contains("write 5% for a percentage, or give a voltage")
+        );
         assert!(
             message("dc(near=1, within=ppm(5))").contains("unknown tolerance")
         );
@@ -373,7 +448,7 @@ mod tests {
         );
         assert!(
             message("dc(near=1e, within=abs(1))")
-                .contains("\"1e\" is not a number")
+                .contains("\"1e\" is not a voltage")
         );
         assert!(message("dc(near=1, within=abs(1)").contains("found the end"));
     }

@@ -23,6 +23,7 @@ pub use netlist::{Netlist, NetlistError};
 pub(crate) use node::node_name;
 pub use probe::{Probe, ProbeError, ProbeProblem};
 use sexpr::SexpError;
+pub(crate) use value::{Unit, parse as parse_value};
 
 use crate::sim::exit_reason;
 pub use supplies::{

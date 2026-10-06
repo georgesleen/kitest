@@ -6,6 +6,8 @@ pub(crate) enum Unit {
     Ohm,
     Farad,
     Henry,
+    Volt,
+    Hertz,
 }
 
 impl Unit {
@@ -15,6 +17,8 @@ impl Unit {
             Self::Ohm => &["\u{3a9}", "\u{2126}", "ohm", "ohms", "Ohm", "Ohms"],
             Self::Farad => &["F"],
             Self::Henry => &["H"],
+            Self::Volt => &["V"],
+            Self::Hertz => &["Hz", "hz", "HZ"],
         }
     }
 
@@ -24,6 +28,8 @@ impl Unit {
             Self::Ohm => "resistance, such as 4k7 or 10kohm",
             Self::Farad => "capacitance, such as 470pF or 100n",
             Self::Henry => "inductance, such as 1uH or 10m",
+            Self::Volt => "voltage, such as 3.3V or 250mV",
+            Self::Hertz => "frequency, such as 10.4MHz or 32.768k",
         }
     }
 }
@@ -50,6 +56,9 @@ const MULTIPLIERS: &[(&str, i32)] = &[
 
 /// The resistance code letter that marks the decimal point, as in `4R7`.
 const OHM_POINT: &str = "R";
+
+/// The voltage letter that marks the decimal point, as in `3V3`.
+const VOLT_POINT: &str = "V";
 
 /// The value of `text` in base units, or `None` if it is not a value in `unit`.
 pub(crate) fn parse(text: &str, unit: Unit) -> Option<f64> {
@@ -111,9 +120,12 @@ fn split_digits(text: &str) -> (&str, &str) {
 
 /// The multiplier `text` starts with, and what follows it.
 fn multiplier(text: &str, unit: Unit) -> Option<(i32, &str)> {
-    if unit == Unit::Ohm
-        && let Some(rest) = text.strip_prefix(OHM_POINT)
-    {
+    let point = match unit {
+        Unit::Ohm => Some(OHM_POINT),
+        Unit::Volt => Some(VOLT_POINT),
+        _ => None,
+    };
+    if let Some(rest) = point.and_then(|point| text.strip_prefix(point)) {
         return Some((0, rest));
     }
     MULTIPLIERS.iter().find_map(|&(symbol, exponent)| {
@@ -173,6 +185,16 @@ mod tests {
         assert_eq!(parse("1uH", Unit::Farad), None);
         assert_eq!(parse("470pF", Unit::Ohm), None);
         assert_eq!(parse("4R7", Unit::Farad), None);
+    }
+
+    #[test]
+    fn reads_volts_and_hertz() {
+        assert!(close(parse("10.1MHz", Unit::Hertz), 10.1e6));
+        assert!(close(parse("32.768 kHz", Unit::Hertz), 32.768e3));
+        assert!(close(parse("10.4e6", Unit::Hertz), 10.4e6));
+        assert!(close(parse("250mV", Unit::Volt), 0.25));
+        assert!(close(parse("3V3", Unit::Volt), 3.3));
+        assert_eq!(parse("3.3V", Unit::Hertz), None);
     }
 
     #[test]
