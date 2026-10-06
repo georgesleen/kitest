@@ -37,6 +37,15 @@ pub enum ModelKind {
     Subckt { name: String, ports: Vec<String> },
 }
 
+impl ModelKind {
+    /// The model or subcircuit name the element line refers to.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Model { name, .. } | Self::Subckt { name, .. } => name,
+        }
+    }
+}
+
 impl ModelLibrary {
     /// The library kitest ships.
     ///
@@ -184,27 +193,38 @@ fn entry(raw: RawEntry) -> Result<ModelEntry, ModelError> {
 /// The tokens of the first `.model` or `.subckt` statement, continuations
 /// joined, with a `.model` device type split from its parameter list.
 fn first_directive(card: &str) -> Option<Vec<String>> {
+    directives(card).into_iter().next()
+}
+
+/// The tokens of every `.model` and `.subckt` statement in `text`, as
+/// `first_directive` splits them.
+fn directives(text: &str) -> Vec<Vec<String>> {
+    let mut found = Vec::new();
     let mut statement: Option<String> = None;
-    for line in card.lines().map(str::trim) {
+    for line in text.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('*') {
             continue;
         }
-        match (&mut statement, line.strip_prefix('+')) {
-            (Some(open), Some(rest)) => {
-                open.push(' ');
-                open.push_str(rest);
-            }
-            (Some(_), None) => break,
-            (None, _) => {
-                let lower = line.to_ascii_lowercase();
-                if lower.starts_with(".model") || lower.starts_with(".subckt") {
-                    statement = Some(line.to_owned());
-                }
-            }
+        if let (Some(open), Some(rest)) =
+            (&mut statement, line.strip_prefix('+'))
+        {
+            open.push(' ');
+            open.push_str(rest);
+            continue;
+        }
+        found.extend(statement.take().map(|open| tokens(&open)));
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with(".model") || lower.starts_with(".subckt") {
+            statement = Some(line.to_owned());
         }
     }
-    let statement = statement?;
-    let head = statement.split('(').next().unwrap_or(&statement);
+    found.extend(statement.map(|open| tokens(&open)));
+    found
+}
+
+fn tokens(statement: &str) -> Vec<String> {
+    let statement = statement.split(';').next().unwrap_or(statement);
+    let head = statement.split('(').next().unwrap_or(statement);
     let mut tokens: Vec<String> =
         head.split_whitespace().map(str::to_owned).collect();
     if tokens[0].eq_ignore_ascii_case(".subckt") {
@@ -216,7 +236,27 @@ fn first_directive(card: &str) -> Option<Vec<String>> {
             tokens.truncate(position);
         }
     }
-    Some(tokens)
+    tokens
+}
+
+/// Every model and subcircuit a SPICE file defines, by name. A subcircuit's
+/// ports are its port names, in port order.
+pub(crate) fn definitions(text: &str) -> Vec<ModelKind> {
+    directives(text)
+        .into_iter()
+        .filter_map(|tokens| {
+            let name = tokens.get(1)?.clone();
+            if tokens[0].eq_ignore_ascii_case(".model") {
+                let device = tokens.get(2)?.to_ascii_lowercase();
+                Some(ModelKind::Model { name, device })
+            } else {
+                Some(ModelKind::Subckt {
+                    name,
+                    ports: tokens[2..].to_vec(),
+                })
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, thiserror::Error)]

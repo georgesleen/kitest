@@ -122,11 +122,36 @@ pub enum NetlistError {
     },
 
     #[error(
-        "{reference} names its own model file with Sim.Library, which kitest \
-         does not read yet; add the model to a [models] library in \
-         kitest.toml instead"
+        "{reference}'s Sim.Library {path} cannot be read: {reason}; a relative \
+         path is taken from the project directory, and ${{KIPRJMOD}} and \
+         environment variables are expanded"
     )]
-    ModelFile { reference: String },
+    ModelFile {
+        reference: String,
+        path: String,
+        reason: String,
+    },
+
+    #[error(
+        "{reference}'s Sim.Name {name:?} is not defined in {path}, which \
+         defines {defined}"
+    )]
+    NotInModelFile {
+        reference: String,
+        name: String,
+        path: String,
+        defined: String,
+    },
+
+    #[error(
+        "{reference} sets Sim.Library {path} but no Sim.Name, and the file \
+         defines {defined}; set Sim.Name to the one to use"
+    )]
+    NoSimName {
+        reference: String,
+        path: String,
+        defined: String,
+    },
 
     #[error(
         "{reference} sets Sim.Params, which kitest does not read on a \
@@ -149,9 +174,10 @@ pub enum NetlistError {
     },
 
     #[error(
-        "{reference} has no simulation model: it has no Sim.Device, and no \
-         model library covers its value {value:?}; add a model for it to a \
-         [models] library in kitest.toml, or exclude {reference} from \
+        "{reference} has no simulation model: it has no Sim.Library or \
+         Sim.Device, and no model library covers its value {value:?}; assign \
+         it a model file in KiCad's Simulation Model dialog, add the model to \
+         a [models] library in kitest.toml, or exclude {reference} from \
          simulation"
     )]
     NoModel { reference: String, value: String },

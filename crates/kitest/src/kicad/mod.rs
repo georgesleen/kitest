@@ -46,15 +46,20 @@ pub fn export_netlist(sch: &Path) -> Result<String, KicadError> {
 pub fn export_design(sch: &Path) -> Result<Design, KicadError> {
     let xml::Export {
         mut components,
-        parts,
+        mut parts,
         nets,
     } = xml::parse(&run_export(sch, "kicadxml")?)?;
     let facts = schematic::read(sch)?;
+    let project = sch.parent().unwrap_or(Path::new("."));
 
     for component in &mut components {
         component.excluded_from_sim =
             facts.excluded_from_sim.contains(&component.reference);
         component.dnp = facts.dnp.contains(&component.reference);
+        resolve_model_file(&mut component.fields, project);
+    }
+    for part in parts.values_mut() {
+        resolve_model_file(&mut part.fields, project);
     }
 
     Ok(Design {
@@ -63,6 +68,44 @@ pub fn export_design(sch: &Path) -> Result<Design, KicadError> {
         nets,
         rails: facts.rails.into_iter().collect(),
     })
+}
+
+/// Rewrite a `Sim.Library` field as the absolute path KiCad would open:
+/// `${VAR}` expanded, with `KIPRJMOD` as the project directory, and a
+/// relative path taken from the project directory.
+fn resolve_model_file(
+    fields: &mut std::collections::BTreeMap<String, String>,
+    project: &Path,
+) {
+    let Some(path) = fields
+        .get_mut(element::SIM_LIBRARY)
+        .filter(|path| !path.trim().is_empty())
+    else {
+        return;
+    };
+    let mut expanded = String::new();
+    let mut rest = path.trim();
+    while let Some(start) = rest.find("${") {
+        expanded.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            break;
+        };
+        let name = &after[..end];
+        let value = if name == "KIPRJMOD" {
+            Some(project.display().to_string())
+        } else {
+            std::env::var(name).ok()
+        };
+        match value {
+            Some(value) => expanded.push_str(&value),
+            None => expanded.push_str(&rest[start..start + 3 + end]),
+        }
+        rest = &after[end + 1..];
+    }
+    expanded.push_str(rest);
+    let resolved = project.join(&expanded);
+    *path = resolved.display().to_string();
 }
 
 /// Run `kicad-cli sch export netlist` on `sch` in `format` and return the file.

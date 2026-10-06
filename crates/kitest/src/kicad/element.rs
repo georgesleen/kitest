@@ -7,14 +7,19 @@ use super::netlist::NetlistError;
 use super::pins::pin_roles;
 use super::value::{self, Unit};
 use super::{Component, LibraryPart};
-use crate::{ModelEntry, ModelKind, ModelLibrary};
+use crate::models::definitions;
+use crate::{ModelKind, ModelLibrary};
 
 /// The field naming a part's device type, such as `NPN` or `R`.
 const SIM_DEVICE: &str = "Sim.Device";
 /// The field holding a part's model parameters.
 const SIM_PARAMS: &str = "Sim.Params";
-/// The fields naming a part's own model file and the model inside it.
-const SIM_MODEL_FILE: [&str; 2] = ["Sim.Library", "Sim.Name"];
+/// The field naming a part's own model file, and the one naming the model
+/// or subcircuit inside it.
+pub(crate) const SIM_LIBRARY: &str = "Sim.Library";
+const SIM_NAME: &str = "Sim.Name";
+/// The field mapping symbol pins to model pins.
+const SIM_PINS: &str = "Sim.Pins";
 /// Prefix of the model name written for a part simulated on defaults.
 const DEFAULT_MODEL_PREFIX: &str = "kitest_default_";
 /// Element letter for a subcircuit instance.
@@ -36,15 +41,10 @@ pub(crate) fn element<'a>(
     libraries: &'a [ModelLibrary],
     nodes: &BTreeMap<&str, Cow<'_, str>>,
 ) -> Result<Element<'a>, NetlistError> {
-    if SIM_MODEL_FILE
-        .iter()
-        .any(|field| component.fields.contains_key(*field))
-    {
-        return Err(NetlistError::ModelFile {
-            reference: component.reference.clone(),
-        });
-    }
     let sim_device = component.fields.get(SIM_DEVICE).map(String::as_str);
+    if let Some(own) = own_model(component, part, sim_device, nodes) {
+        return own;
+    }
     if let Some(passive) = Passive::of(component, sim_device) {
         return passive.element(component, part, nodes);
     }
@@ -52,9 +52,106 @@ pub(crate) fn element<'a>(
         .iter()
         .find_map(|library| library.find(&component.value));
     match entry {
-        Some(entry) => modelled(component, part, entry, sim_device, nodes),
+        Some(entry) => modelled(
+            component,
+            part,
+            &entry.kind,
+            Cow::Borrowed(&entry.card),
+            sim_device,
+            nodes,
+        ),
         None => defaulted(component, part, sim_device, nodes),
     }
+}
+
+/// `component` bound to the model its `Sim.Library` file defines, as KiCad's
+/// own simulator would bind it, or `None` if it names no file.
+fn own_model<'a>(
+    component: &Component,
+    part: &LibraryPart,
+    sim_device: Option<&str>,
+    nodes: &BTreeMap<&str, Cow<'_, str>>,
+) -> Option<Result<Element<'a>, NetlistError>> {
+    let field = |name: &str| {
+        component
+            .fields
+            .get(name)
+            .or_else(|| part.fields.get(name))
+            .map(String::as_str)
+            .filter(|text| !text.trim().is_empty())
+    };
+    let path = field(SIM_LIBRARY)?;
+    let reference = &component.reference;
+    let bound = (|| {
+        let text = std::fs::read_to_string(path).map_err(|error| {
+            NetlistError::ModelFile {
+                reference: reference.clone(),
+                path: path.to_owned(),
+                reason: error.to_string(),
+            }
+        })?;
+        let defined = definitions(&text);
+        let listed = || {
+            let names: Vec<&str> =
+                defined.iter().map(ModelKind::name).collect();
+            if names.is_empty() {
+                "no .model or .subckt".to_owned()
+            } else {
+                names.join(", ")
+            }
+        };
+        let kind = match field(SIM_NAME) {
+            Some(name) => defined
+                .iter()
+                .find(|kind| kind.name().eq_ignore_ascii_case(name))
+                .ok_or_else(|| NetlistError::NotInModelFile {
+                    reference: reference.clone(),
+                    name: name.to_owned(),
+                    path: path.to_owned(),
+                    defined: listed(),
+                })?,
+            None => match defined.as_slice() {
+                [only] => only,
+                _ => {
+                    return Err(NetlistError::NoSimName {
+                        reference: reference.clone(),
+                        path: path.to_owned(),
+                        defined: listed(),
+                    });
+                }
+            },
+        };
+        let card = Cow::Owned(format!(".include \"{path}\""));
+        match kind {
+            ModelKind::Subckt { ports, .. } if field(SIM_PINS).is_none() => {
+                let ordered = in_pin_order(component, part, ports);
+                modelled(&ordered, part, kind, card, sim_device, nodes)
+            }
+            _ => modelled(component, part, kind, card, sim_device, nodes),
+        }
+    })();
+    Some(bound)
+}
+
+/// `component` with `Sim.Pins` mapping its pins, in pin-number order, to
+/// `ports` in port order, which is KiCad's default when no `Sim.Pins` is set.
+fn in_pin_order(
+    component: &Component,
+    part: &LibraryPart,
+    ports: &[String],
+) -> Component {
+    let mut numbers: Vec<&str> =
+        part.pins.iter().map(|pin| pin.number.as_str()).collect();
+    numbers
+        .sort_by_key(|number| (number.parse::<u64>().ok(), number.to_string()));
+    let pairs: Vec<String> = numbers
+        .iter()
+        .zip(ports)
+        .map(|(number, port)| format!("{number}={port}"))
+        .collect();
+    let mut ordered = component.clone();
+    ordered.fields.insert(SIM_PINS.to_owned(), pairs.join(" "));
+    ordered
 }
 
 /// A two-terminal part whose Value is its only parameter.
@@ -258,15 +355,16 @@ impl Device {
     }
 }
 
-/// `component` bound to the library `entry` covering its Value.
+/// `component` bound to a model of `kind`, whose definition is `card`.
 fn modelled<'a>(
     component: &Component,
     part: &LibraryPart,
-    entry: &'a ModelEntry,
+    kind: &ModelKind,
+    card: Cow<'a, str>,
     sim_device: Option<&str>,
     nodes: &BTreeMap<&str, Cow<'_, str>>,
 ) -> Result<Element<'a>, NetlistError> {
-    let (letter, ordered, model) = match &entry.kind {
+    let (letter, ordered, model) = match kind {
         ModelKind::Model { name, device } => {
             let chosen = Device::by_model_type(device).ok_or_else(|| {
                 NetlistError::UnsupportedDevice {
@@ -308,7 +406,7 @@ fn modelled<'a>(
             element_name(letter, &component.reference),
             ordered.join(" "),
         ),
-        card: Some(Cow::Borrowed(&entry.card)),
+        card: Some(card),
         defaulted: false,
     })
 }
@@ -602,16 +700,90 @@ mod tests {
         );
     }
 
+    /// A temporary SPICE file holding `text`, and its path.
+    fn spice_file(text: &str) -> (tempfile::TempDir, String) {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("models.lib");
+        std::fs::write(&path, text).expect("written");
+        let path = path.display().to_string();
+        (directory, path)
+    }
+
+    const MODELS: &str = "* vendor models\n\
+        .model MYQ NPN(IS=1e-14 BF=200\n\
+        + VAF=100)\n\
+        .subckt OPAMP inp inn out vcc vee\n\
+        R1 inp inn 1meg\n\
+        .ends OPAMP\n";
+
     #[test]
-    fn a_model_file_on_the_part_is_rejected_for_now() {
+    fn a_model_file_on_the_part_binds_its_named_model_ahead_of_the_library() {
+        let (_directory, path) = spice_file(MODELS);
         let transistor = component(
             "Q1",
             "2N3904",
-            &[("Sim.Library", "q.lib")],
+            &[("Sim.Library", &path), ("Sim.Name", "myq")],
+            &["1", "2", "3"],
+        );
+        let libraries = [ModelLibrary::bundled()];
+        let element =
+            resolve(&transistor, &part(EBC), &libraries).expect("binds");
+        assert_eq!(element.line, "Q1 n3 n2 n1 MYQ");
+        assert_eq!(
+            element.card.as_deref(),
+            Some(&*format!(".include \"{path}\""))
+        );
+    }
+
+    #[test]
+    fn a_subcircuit_without_sim_pins_takes_pins_in_number_order() {
+        let (_directory, path) = spice_file(MODELS);
+        let amplifier = component(
+            "U1",
+            "TL072",
+            &[("Sim.Library", &path), ("Sim.Name", "OPAMP")],
+            &["1", "2", "3", "4", "5"],
+        );
+        let pins =
+            [("1", "+"), ("2", "-"), ("3", "~"), ("4", "V+"), ("5", "V-")];
+        let element = resolve(&amplifier, &part(&pins), &[]).expect("binds");
+        assert_eq!(element.line, "XU1 n1 n2 n3 n4 n5 OPAMP");
+    }
+
+    #[test]
+    fn a_model_file_problem_names_the_part_and_what_the_file_defines() {
+        let (_directory, path) = spice_file(MODELS);
+        let missing = component(
+            "Q1",
+            "2N3904",
+            &[("Sim.Library", &path), ("Sim.Name", "Q2N2222")],
+            &["1", "2", "3"],
+        );
+        let message = resolve(&missing, &part(EBC), &[])
+            .expect_err("not defined")
+            .to_string();
+        assert!(message.contains("\"Q2N2222\""), "{message}");
+        assert!(message.contains("MYQ, OPAMP"), "{message}");
+
+        let unnamed = component(
+            "Q1",
+            "2N3904",
+            &[("Sim.Library", &path)],
             &["1", "2", "3"],
         );
         assert!(matches!(
-            resolve(&transistor, &part(EBC), &[ModelLibrary::bundled()]),
+            resolve(&unnamed, &part(EBC), &[]),
+            Err(NetlistError::NoSimName { .. })
+        ));
+
+        let unreadable = component(
+            "Q1",
+            "2N3904",
+            &[("Sim.Library", "/nonexistent/q.lib")],
+            &["1", "2", "3"],
+        );
+        assert!(matches!(
+            resolve(&unreadable, &part(EBC), &[]),
             Err(NetlistError::ModelFile { .. })
         ));
     }
