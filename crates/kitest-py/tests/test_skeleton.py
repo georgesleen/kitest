@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -76,3 +77,37 @@ def test_bad_config_reports_where_toml_broke(tmp_path):
     message = str(error.value)
     assert "is not a valid kitest config" in message
     assert "line 2" in message
+
+
+def _colpitts_with_expect(tmp_path, expect):
+    project = tmp_path / "colpitts"
+    shutil.copytree(COLPITTS_SCH.parent, project)
+    sch = project / "colpitts.kicad_sch"
+    text = sch.read_text()
+    probe = text.index('(property "Reference" "PRB1"')
+    blank = '(property "Expect" ""'
+    field = text.index(blank, probe)
+    sch.write_text(
+        text[:field] + f'(property "Expect" "{expect}"' + text[field + len(blank) :]
+    )
+    return project
+
+
+def test_check_project_reports_a_failed_probe_with_its_measurement(tmp_path):
+    project = _colpitts_with_expect(
+        tmp_path, "oscillates(near=12e6, within=percent(2))"
+    )
+    report = kitest.check_project(str(project))
+    assert not report
+    [outcome] = report.outcomes()
+    assert outcome.probe() == "COLPITTS_OUT"
+    assert outcome.corner() == [("VCC", 9.0)]
+    check = outcome.check()
+    assert not check
+    assert "from 12 MHz" in str(check)
+
+
+def test_check_project_rejects_an_unreadable_expect(tmp_path):
+    project = _colpitts_with_expect(tmp_path, "dc(near=3.7)")
+    with pytest.raises(kitest.CheckError, match="PRB1 Expect: dc needs within="):
+        kitest.check_project(str(project))

@@ -1,7 +1,7 @@
 //! Closeness tolerance shared by the result assertions.
 
 /// How close a value must be to a target.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tolerance {
     /// Absolute distance from the target.
     Abs(f64),

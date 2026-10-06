@@ -8,6 +8,7 @@ __all__ = [
     "Ac",
     "AcSupply",
     "Check",
+    "CheckError",
     "Config",
     "ConfigError",
     "Corner",
@@ -21,11 +22,13 @@ __all__ = [
     "NetlistError",
     "Ngspice",
     "OperatingPoint",
+    "Outcome",
     "Power",
     "Probe",
     "ProbeError",
     "Pulse",
     "Rail",
+    "Report",
     "Response",
     "Signal",
     "SimulationError",
@@ -39,6 +42,7 @@ __all__ = [
     "TranSource",
     "Transient",
     "Voltage",
+    "check_project",
     "export_design",
     "version",
 ]
@@ -62,6 +66,12 @@ class Check:
     def __bool__(self) -> builtins.bool: ...
     def __str__(self) -> builtins.str: ...
     def __repr__(self) -> builtins.str: ...
+
+class CheckError(KitestError):
+    r"""
+    A project's probes cannot be checked: a bad Expect field, or a failure reading or simulating the design.
+    """
+    ...
 
 @typing.final
 class Config:
@@ -198,6 +208,36 @@ class OperatingPoint:
     def nodes(self) -> builtins.list[builtins.str]: ...
 
 @typing.final
+class Outcome:
+    r"""
+    One probe's result at one corner.
+    """
+    def probe(self) -> builtins.str:
+        r"""
+        The probe's name.
+        """
+    def reference(self) -> builtins.str:
+        r"""
+        The probe's reference designator.
+        """
+    def net(self) -> builtins.str:
+        r"""
+        The net the probe sits on.
+        """
+    def corner(self) -> builtins.list[tuple[builtins.str, builtins.float]]:
+        r"""
+        The voltage of each rail kitest sourced, by SPICE node.
+        """
+    def check(self) -> typing.Optional[Check]:
+        r"""
+        The check, or `None` for a probe with no `Expect`.
+        """
+    def __bool__(self) -> builtins.bool:
+        r"""
+        False only for a check that ran and failed.
+        """
+
+@typing.final
 class Power:
     def rails(self) -> builtins.list[Rail]:
         r"""
@@ -264,6 +304,20 @@ class Rail:
     def driven_by(self) -> builtins.list[builtins.str]:
         r"""
         The pins driving a driven rail; empty otherwise.
+        """
+
+@typing.final
+class Report:
+    r"""
+    Every probe's outcome at every corner.
+    """
+    def outcomes(self) -> builtins.list[Outcome]:
+        r"""
+        Each probe's outcome, in probe then corner order.
+        """
+    def __bool__(self) -> builtins.bool:
+        r"""
+        Whether no check failed.
         """
 
 @typing.final
@@ -392,6 +446,12 @@ class Sweep(enum.Enum):
     Dec = ...
     Oct = ...
     Lin = ...
+
+def check_project(project: builtins.str) -> Report:
+    r"""
+    Check every probe in the KiCad project at `project`, a directory or a
+    `.kicad_sch` file, against its `Expect` field.
+    """
 
 def export_design(sch: builtins.str) -> Design:
     r"""

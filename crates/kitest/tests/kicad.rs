@@ -1,6 +1,6 @@
 use kitest::{
-    Backend, Config, ModelLibrary, Ngspice, SupplyProblem, Tran, export_design,
-    export_netlist,
+    Backend, CheckError, Config, ModelLibrary, Ngspice, SupplyProblem, Tran,
+    check_project, export_design, export_netlist,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -122,4 +122,76 @@ fn the_drawn_colpitts_probe_is_read_by_name() {
     assert_eq!(probe.reference(), "PRB1");
     assert_eq!(probe.net().name, "/OUT");
     assert_eq!(probe.expect(), None);
+}
+
+/// The colpitts design with probe PRB1's Expect field set to `expect`.
+fn colpitts_expecting(expect: &str) -> kitest::Design {
+    let mut design =
+        export_design(Path::new(&format!("{COLPITTS}/colpitts.kicad_sch")))
+            .unwrap();
+    let probe = design
+        .components
+        .iter_mut()
+        .find(|component| component.reference == "PRB1")
+        .expect("PRB1 present");
+    probe.fields.insert("Expect".into(), expect.into());
+    design
+}
+
+#[test]
+fn the_colpitts_probe_passes_its_oscillation_check() {
+    let design =
+        colpitts_expecting("oscillates(near=10.115e6, within=percent(2))");
+    let config = Config::for_project(Path::new(COLPITTS)).expect("config");
+    let report = design.check(&config, &Ngspice::default()).expect("ran");
+
+    assert_eq!(report.outcomes.len(), 1);
+    let outcome = &report.outcomes[0];
+    assert_eq!(outcome.probe, "COLPITTS_OUT");
+    assert_eq!(outcome.corner, [("VCC".to_owned(), 9.0)]);
+    let check = outcome.check.as_ref().expect("a check ran");
+    assert!(check.passed(), "{check}");
+    assert!(report.passed());
+}
+
+#[test]
+fn the_colpitts_probe_fails_a_wrong_frequency_and_says_what_it_measured() {
+    let design = colpitts_expecting("oscillates(near=12e6, within=percent(2))");
+    let config = Config::for_project(Path::new(COLPITTS)).expect("config");
+    let report = design.check(&config, &Ngspice::default()).expect("ran");
+
+    let check = report.outcomes[0].check.as_ref().expect("a check ran");
+    assert!(!check.passed());
+    assert!(check.message().contains("MHz from 12 MHz"), "{check}");
+    assert!(!report.passed());
+}
+
+#[test]
+fn the_colpitts_probe_checks_its_dc_bias() {
+    let design = colpitts_expecting("dc(near=3.7, within=abs(0.1))");
+    let config = Config::for_project(Path::new(COLPITTS)).expect("config");
+    let report = design.check(&config, &Ngspice::default()).expect("ran");
+
+    let check = report.outcomes[0].check.as_ref().expect("a check ran");
+    assert!(check.passed(), "{check}");
+}
+
+#[test]
+fn an_unreadable_expect_names_the_probe_before_simulating() {
+    let design = colpitts_expecting("oscilates(near=1e7, within=percent(2))");
+    let config = Config::for_project(Path::new(COLPITTS)).expect("config");
+    let error = design.check(&config, &Ngspice::default()).unwrap_err();
+
+    assert!(matches!(error, CheckError::Expect { .. }), "{error}");
+    let message = error.to_string();
+    assert!(message.contains("PRB1 Expect"), "{message}");
+    assert!(message.contains("\"oscilates\""), "{message}");
+}
+
+#[test]
+fn checking_the_project_directory_finds_its_schematic() {
+    let report = check_project(Path::new(COLPITTS)).expect("ran");
+    assert_eq!(report.outcomes.len(), 1);
+    assert_eq!(report.outcomes[0].check, None);
+    assert!(report.passed());
 }

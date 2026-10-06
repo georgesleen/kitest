@@ -1,6 +1,7 @@
 //! Core types and the simulation backend seam for kitest.
 
 mod analysis;
+mod check;
 mod config;
 mod directives;
 mod kicad;
@@ -9,8 +10,12 @@ mod sim;
 mod stimulus;
 
 pub use analysis::{
-    Frequency, OperatingPoint, Response, Signal, Spectra, Tolerance, Tone,
-    Transient, Voltage,
+    Check, Frequency, OperatingPoint, Response, Signal, Spectra, Tolerance,
+    Tone, Transient, Voltage,
+};
+pub use check::{
+    CheckError, ExpectError, Expectation, Outcome, Report, check_project,
+    parse_expectation,
 };
 pub use config::{CONFIG_FILE, Config, ConfigError};
 pub use directives::{Ac, Sweep, Tran};

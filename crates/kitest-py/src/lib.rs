@@ -9,10 +9,10 @@ use pyo3_stub_gen::derive::{
 };
 
 use ::kitest::{
-    Ac, AcSupply, Backend, Config, Corner, DcSupply, Design, Frequency,
-    ModelLibrary, Ngspice, OperatingPoint, Power, Probe, Pulse, Rail, RailKind,
-    Response, Signal, Sin, Spectra, Sweep, Tolerance, Tone, Tran, TranSource,
-    Transient, Voltage, VoltageOrigin,
+    Ac, AcSupply, Backend, Check, Config, Corner, DcSupply, Design, Frequency,
+    ModelLibrary, Ngspice, OperatingPoint, Outcome, Power, Probe, Pulse, Rail,
+    RailKind, Response, Signal, Sin, Spectra, Sweep, Tolerance, Tone, Tran,
+    TranSource, Transient, Voltage, VoltageOrigin,
 };
 
 /// Returns the kitest version string.
@@ -402,70 +402,103 @@ impl PyTolerance {
 #[gen_stub_pyclass]
 #[pyclass(module = "kitest._kitest", name = "Check")]
 struct PyCheck {
-    passed: bool,
-    message: String,
+    inner: Check,
 }
 
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyCheck {
     fn __bool__(&self) -> bool {
-        self.passed
+        self.inner.passed()
     }
 
     fn __str__(&self) -> String {
-        self.message.clone()
+        self.inner.to_string()
     }
 
     fn __repr__(&self) -> String {
-        let outcome = if self.passed { "pass" } else { "fail" };
-        format!("Check({outcome}: {})", self.message)
+        let outcome = if self.inner.passed() { "pass" } else { "fail" };
+        format!("Check({outcome}: {})", self.inner)
     }
 }
 
-/// A check that `measured` is within `tolerance` of `expected`.
-fn closeness(
-    passed: bool,
-    measured: f64,
-    expected: f64,
-    tolerance: Tolerance,
-    unit: &str,
-) -> PyCheck {
-    let relation = if passed { "within" } else { "outside" };
-    PyCheck {
-        passed,
-        message: format!(
-            "{} is {} from {}, {relation} {}",
-            si(measured, unit),
-            si((measured - expected).abs(), unit),
-            si(expected, unit),
-            describe_tolerance(tolerance, expected, unit),
-        ),
+/// Check every probe in the KiCad project at `project`, a directory or a
+/// `.kicad_sch` file, against its `Expect` field.
+#[gen_stub_pyfunction(module = "kitest._kitest")]
+#[pyfunction]
+fn check_project(project: &str) -> PyResult<PyReport> {
+    let report = ::kitest::check_project(Path::new(project))
+        .map_err(raise::<CheckError>)?;
+    Ok(PyReport {
+        outcomes: report.outcomes,
+    })
+}
+
+/// Every probe's outcome at every corner.
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Report")]
+struct PyReport {
+    outcomes: Vec<Outcome>,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyReport {
+    /// Each probe's outcome, in probe then corner order.
+    fn outcomes(&self) -> Vec<PyOutcome> {
+        self.outcomes
+            .iter()
+            .map(|inner| PyOutcome {
+                inner: inner.clone(),
+            })
+            .collect()
+    }
+
+    /// Whether no check failed.
+    fn __bool__(&self) -> bool {
+        self.outcomes.iter().all(Outcome::passed)
     }
 }
 
-/// `tolerance` around `target`, as `±25 mV` or `±1% (25 mV)`.
-fn describe_tolerance(tolerance: Tolerance, target: f64, unit: &str) -> String {
-    match tolerance {
-        Tolerance::Abs(v) => format!("±{}", si(v, unit)),
-        Tolerance::Percent(p) => {
-            format!("±{p}% ({})", si(tolerance.band(target), unit))
-        }
-    }
+/// One probe's result at one corner.
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Outcome")]
+struct PyOutcome {
+    inner: Outcome,
 }
 
-/// `value` with an SI prefix and up to four decimals, such as `10.1496 MHz`.
-fn si(value: f64, unit: &str) -> String {
-    const PREFIXES: [&str; 9] = ["p", "n", "µ", "m", "", "k", "M", "G", "T"];
-    if value == 0.0 || !value.is_finite() {
-        return format!("{value} {unit}").trim_end().to_owned();
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyOutcome {
+    /// The probe's name.
+    fn probe(&self) -> String {
+        self.inner.probe.clone()
     }
-    let power = (value.abs().log10() / 3.0).floor().clamp(-4.0, 4.0);
-    let scaled = value / 1000f64.powf(power);
-    let digits = format!("{scaled:.4}");
-    let digits = digits.trim_end_matches('0').trim_end_matches('.');
-    let prefix = PREFIXES[(power + 4.0) as usize];
-    format!("{digits} {prefix}{unit}").trim_end().to_owned()
+
+    /// The probe's reference designator.
+    fn reference(&self) -> String {
+        self.inner.reference.clone()
+    }
+
+    /// The net the probe sits on.
+    fn net(&self) -> String {
+        self.inner.net.clone()
+    }
+
+    /// The voltage of each rail kitest sourced, by SPICE node.
+    fn corner(&self) -> Vec<(String, f64)> {
+        self.inner.corner.clone()
+    }
+
+    /// The check, or `None` for a probe with no `Expect`.
+    fn check(&self) -> Option<PyCheck> {
+        self.inner.check.clone().map(|inner| PyCheck { inner })
+    }
+
+    /// False only for a check that ran and failed.
+    fn __bool__(&self) -> bool {
+        self.inner.passed()
+    }
 }
 
 #[gen_stub_pyclass]
@@ -484,12 +517,18 @@ impl PyFrequency {
 
     /// Whether the frequency is within `tolerance` of `expected`.
     fn near(&self, expected: f64, tolerance: PyTolerance) -> PyCheck {
-        let passed = self.inner.near(expected, tolerance.inner);
-        closeness(passed, self.inner.hertz(), expected, tolerance.inner, "Hz")
+        PyCheck {
+            inner: Check::near(
+                self.inner.hertz(),
+                expected,
+                tolerance.inner,
+                "Hz",
+            ),
+        }
     }
 
     fn __repr__(&self) -> String {
-        format!("Frequency({})", si(self.inner.hertz(), "Hz"))
+        format!("Frequency({})", self.inner)
     }
 }
 
@@ -538,12 +577,18 @@ impl PyVoltage {
 
     /// Whether the voltage is within `tolerance` of `expected`.
     fn near(&self, expected: f64, tolerance: PyTolerance) -> PyCheck {
-        let passed = self.inner.near(expected, tolerance.inner);
-        closeness(passed, self.inner.volts(), expected, tolerance.inner, "V")
+        PyCheck {
+            inner: Check::near(
+                self.inner.volts(),
+                expected,
+                tolerance.inner,
+                "V",
+            ),
+        }
     }
 
     fn __repr__(&self) -> String {
-        format!("Voltage({})", si(self.inner.volts(), "V"))
+        format!("Voltage({})", self.inner)
     }
 }
 
@@ -678,6 +723,12 @@ exception!(
 exception!(SupplyError, KitestError, "Power rails cannot be resolved.");
 exception!(ProbeError, KitestError, "A probe cannot be read.");
 exception!(SimulationError, KitestError, "The simulator failed.");
+exception!(
+    CheckError,
+    KitestError,
+    "A project's probes cannot be checked: a bad Expect field, or a failure \
+     reading or simulating the design."
+);
 
 /// Raise `error` as exception `E`, with every underlying cause appended.
 fn raise<E: pyo3::PyTypeInfo>(error: impl std::error::Error) -> PyErr {
@@ -960,28 +1011,9 @@ impl PySignal {
         window: f64,
     ) -> PyCheck {
         let signal = Signal::new(&self.time, &self.values);
-        let passed = signal.settles_to(target, tolerance.inner, window);
-        let tolerance = describe_tolerance(tolerance.inner, target, "V");
-        let message = match signal.worst_deviation(target, window) {
-            Some(worst) => format!(
-                "over the last {}, the signal strays up to {} from {}, {} {tolerance}",
-                si(window, "s"),
-                si(worst, "V"),
-                si(target, "V"),
-                if passed { "within" } else { "outside" },
-            ),
-            None => {
-                let span = match (self.time.first(), self.time.last()) {
-                    (Some(first), Some(last)) => si(last - first, "s"),
-                    _ => "0 s".to_owned(),
-                };
-                format!(
-                    "the signal spans {span}, shorter than the {} window",
-                    si(window, "s")
-                )
-            }
-        };
-        PyCheck { passed, message }
+        PyCheck {
+            inner: Check::settles(&signal, target, tolerance.inner, window),
+        }
     }
 
     fn overshoot(&self, target: f64) -> f64 {
@@ -1080,6 +1112,9 @@ impl PySpectra {
 fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(export_design, m)?)?;
+    m.add_function(wrap_pyfunction!(check_project, m)?)?;
+    m.add_class::<PyReport>()?;
+    m.add_class::<PyOutcome>()?;
     m.add_class::<PyDesign>()?;
     m.add_class::<PyNetlist>()?;
     m.add_class::<PyProbe>()?;
@@ -1115,6 +1150,7 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SupplyError", py.get_type::<SupplyError>())?;
     m.add("ProbeError", py.get_type::<ProbeError>())?;
     m.add("SimulationError", py.get_type::<SimulationError>())?;
+    m.add("CheckError", py.get_type::<CheckError>())?;
     Ok(())
 }
 

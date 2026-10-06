@@ -1,5 +1,6 @@
 //! Simulation outputs and the assertions over them.
 
+mod check;
 mod frequency;
 mod response;
 mod signal;
@@ -8,6 +9,8 @@ mod tolerance;
 mod tone;
 mod voltage;
 
+pub use check::Check;
+pub(crate) use check::si;
 pub use frequency::Frequency;
 pub use response::Response;
 pub use signal::Signal;

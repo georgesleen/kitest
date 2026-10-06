@@ -24,6 +24,12 @@ impl Voltage {
     }
 }
 
+impl std::fmt::Display for Voltage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::analysis::si(self.volts, "V"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -20,6 +20,7 @@ pub use design::{
     Component, Design, LibraryId, LibraryPart, LibraryPin, Net, Node, PinKind,
 };
 pub use netlist::{Netlist, NetlistError};
+pub(crate) use node::node_name;
 pub use probe::{Probe, ProbeError, ProbeProblem};
 use sexpr::SexpError;
 

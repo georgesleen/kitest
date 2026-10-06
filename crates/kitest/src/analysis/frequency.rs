@@ -24,6 +24,12 @@ impl Frequency {
     }
 }
 
+impl std::fmt::Display for Frequency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::analysis::si(self.hertz, "Hz"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
