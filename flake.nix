@@ -13,7 +13,12 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          pythonEnv = pkgs.python3.withPackages (ps: [ ps.matplotlib ]);
+          # Every Python dependency comes from nixpkgs: matplotlib backs
+          # kitest.scope, pytest runs the tests, maturin builds release wheels.
+          pythonEnv = pkgs.python3.withPackages (ps: [
+            ps.matplotlib
+            ps.pytest
+          ]);
         in
         {
           default = pkgs.mkShell {
@@ -30,20 +35,10 @@
               lldb
               ngspice
               pythonEnv
-              uv
+              maturin
               kicad-small
             ];
 
-            # Never let uv fetch its own python; it uses the nix python3 on PATH.
-            # (Do not set UV_PYTHON to the store path: maturin develop's internal
-            # `uv pip install` would then target the immutable /nix/store and fail.
-            # The venv target pins the interpreter per-command instead.)
-            env.UV_PYTHON_DOWNLOADS = "never";
-
-            # matplotlib backs kitest.scope. Taken from nixpkgs, where its
-            # native libraries already resolve, and put on PYTHONPATH so the
-            # uv venv sees it without a binary wheel.
-            env.PYTHONPATH = "${pythonEnv}/${pkgs.python3.sitePackages}";
           };
         }
       );

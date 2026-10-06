@@ -10,9 +10,6 @@ requires-python = ">=3.9"
 [project.optional-dependencies]
 plot = ["matplotlib"]
 
-[dependency-groups]
-dev = ["pytest", "maturin"]
-
 [tool.maturin]
 module-name = "kitest._kitest"
 python-source = "python"

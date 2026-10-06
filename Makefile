@@ -1,6 +1,6 @@
 NIX_FILES := $(shell find . -name '*.nix' -not -path './.git/*')
 
-.PHONY: fmt fmt-check lint test pytest build venv stubs stubs-check
+.PHONY: fmt fmt-check lint test pytest build stubs stubs-check
 
 fmt:
 	nixfmt $(NIX_FILES)
@@ -10,25 +10,21 @@ fmt-check:
 	nixfmt --check $(NIX_FILES)
 	cargo fmt --check
 
-# Provision the kitest-py venv the Python-linking crates build against.
-# Pin the interpreter to the nix python3 on PATH so uv does not create the venv
-# from a cached managed python of a different version than maturin builds against.
-venv:
-	uv --directory crates/kitest-py sync --python "$$(command -v python3)"
-
-lint: venv
+lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
 test:
 	cargo test
 	$(MAKE) pytest
 
-# `uv run` auto-syncs before each command, which reinstalls a cached build of
-# the kitest package (cache keyed on the unchanging 0.0.0 version) and clobbers
-# the fresh extension maturin just built. --no-sync keeps maturin's install.
-pytest: venv
-	uv --directory crates/kitest-py run --no-sync maturin develop
-	uv --directory crates/kitest-py run --no-sync pytest
+# Build the extension with cargo and link it into the package source, where
+# Python finds kitest._kitest beside kitest/__init__.py. No venv: pytest and
+# every other Python dependency come from the nix dev shell.
+TARGET_DIR := $(abspath $(or $(CARGO_TARGET_DIR),target))
+pytest:
+	cargo build -p kitest-py --lib --features pyo3/extension-module
+	ln -sf $(TARGET_DIR)/debug/libkitest_py.so crates/kitest-py/python/kitest/_kitest.so
+	cd crates/kitest-py && PYTHONPATH=python pytest
 
 build:
 	cargo build
