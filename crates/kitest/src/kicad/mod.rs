@@ -22,12 +22,17 @@ pub use design::{
 pub use netlist::{Netlist, NetlistError};
 pub use probe::{Probe, ProbeError, ProbeProblem};
 use sexpr::SexpError;
+
+use crate::sim::exit_reason;
 pub use supplies::{
     Corner, Power, Rail, RailKind, SupplyError, SupplyProblem, VoltageOrigin,
 };
 
 /// SPICE deck terminator; kitest works in bodies, so the exporter strips it.
 const SPICE_END: &str = ".end";
+
+/// The KiCad command-line program kitest drives.
+const KICAD_CLI: &str = "kicad-cli";
 
 /// Export the schematic at `sch` to a SPICE netlist body (no trailing `.end`).
 pub fn export_netlist(sch: &Path) -> Result<String, KicadError> {
@@ -60,19 +65,26 @@ pub fn export_design(sch: &Path) -> Result<Design, KicadError> {
 
 /// Run `kicad-cli sch export netlist` on `sch` in `format` and return the file.
 fn run_export(sch: &Path, format: &str) -> Result<String, KicadError> {
+    if matches!(sch.try_exists(), Ok(false)) {
+        return Err(KicadError::MissingSchematic {
+            path: sch.to_path_buf(),
+        });
+    }
+
     let dir = tempfile::tempdir().map_err(KicadError::Io)?;
     let out_path = dir.path().join("netlist");
 
-    let output = Command::new("kicad-cli")
+    let output = Command::new(KICAD_CLI)
         .args(["sch", "export", "netlist", "--format", format])
         .arg("-o")
         .arg(&out_path)
         .arg(sch)
         .output()
-        .map_err(KicadError::Spawn)?;
+        .map_err(spawn_error)?;
 
     if !output.status.success() {
         return Err(KicadError::Exec {
+            path: sch.to_path_buf(),
             code: output.status.code(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
@@ -81,16 +93,41 @@ fn run_export(sch: &Path, format: &str) -> Result<String, KicadError> {
     std::fs::read_to_string(&out_path).map_err(KicadError::Io)
 }
 
+/// Classify a failure to launch kicad-cli.
+fn spawn_error(err: std::io::Error) -> KicadError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        KicadError::NotInstalled(err)
+    } else {
+        KicadError::Spawn(err)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum KicadError {
+    #[error("schematic {} does not exist", path.display())]
+    MissingSchematic { path: PathBuf },
+
+    #[error(
+        "kicad-cli was not found on PATH; install KiCad 9 or later, or enter the nix dev shell"
+    )]
+    NotInstalled(#[source] std::io::Error),
+
     #[error("could not launch kicad-cli")]
     Spawn(#[source] std::io::Error),
 
     #[error("io error while running kicad-cli")]
     Io(#[source] std::io::Error),
 
-    #[error("kicad-cli exited with status {code:?}:\n{stderr}")]
-    Exec { code: Option<i32>, stderr: String },
+    #[error(
+        "kicad-cli failed ({}) on {}:\n{stderr}",
+        exit_reason(*code),
+        path.display()
+    )]
+    Exec {
+        path: PathBuf,
+        code: Option<i32>,
+        stderr: String,
+    },
 
     #[error("kicadxml export is not valid XML")]
     Xml(#[source] roxmltree::Error),
@@ -148,5 +185,49 @@ mod tests {
     #[test]
     fn tolerates_missing_end() {
         assert_eq!(strip_end("R1 a b 1k\n"), "R1 a b 1k");
+    }
+
+    #[test]
+    fn missing_schematic_is_reported_before_running_kicad_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let sch = dir.path().join("missing.kicad_sch");
+
+        for err in [
+            export_netlist(&sch).expect_err("schematic is missing"),
+            export_design(&sch).expect_err("schematic is missing"),
+        ] {
+            assert!(
+                matches!(&err, KicadError::MissingSchematic { path } if *path == sch),
+                "{err:?}"
+            );
+            assert!(err.to_string().contains(&sch.display().to_string()));
+        }
+    }
+
+    #[test]
+    fn absent_kicad_cli_points_at_path() {
+        let err = spawn_error(std::io::ErrorKind::NotFound.into());
+        let message = err.to_string();
+        assert!(matches!(err, KicadError::NotInstalled(_)), "{err:?}");
+        assert!(message.contains("kicad-cli") && message.contains("PATH"));
+    }
+
+    #[test]
+    fn other_launch_failures_stay_generic() {
+        let err = spawn_error(std::io::ErrorKind::PermissionDenied.into());
+        assert!(matches!(err, KicadError::Spawn(_)), "{err:?}");
+    }
+
+    #[test]
+    fn failed_export_names_the_schematic_and_exit_status() {
+        let err = KicadError::Exec {
+            path: PathBuf::from("/tmp/board.kicad_sch"),
+            code: Some(3),
+            stderr: "boom".into(),
+        };
+        let message = err.to_string();
+        assert!(message.contains("/tmp/board.kicad_sch"), "{message}");
+        assert!(message.contains("exit status 3"), "{message}");
+        assert!(!message.contains("Some("), "{message}");
     }
 }

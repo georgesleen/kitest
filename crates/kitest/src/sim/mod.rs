@@ -37,3 +37,11 @@ pub trait Backend {
         params: Ac,
     ) -> Result<Spectra, Self::Error>;
 }
+
+/// Describe a failed child process's exit for an error message.
+pub(crate) fn exit_reason(code: Option<i32>) -> String {
+    match code {
+        Some(code) => format!("exit status {code}"),
+        None => "killed by a signal".to_owned(),
+    }
+}

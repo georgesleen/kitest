@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use num_complex::Complex64;
 
+use super::exit_reason;
 use crate::stimulus::{AcSupply, inject, inject_tran};
 use crate::{
     Ac, Backend, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Transient,
@@ -86,7 +87,7 @@ impl Ngspice {
             .arg("-b")
             .arg(&deck_path)
             .output()
-            .map_err(NgspiceError::Spawn)?;
+            .map_err(|source| spawn_error(&self.binary, source))?;
 
         if !output.status.success() {
             return Err(NgspiceError::Exec {
@@ -101,15 +102,38 @@ impl Ngspice {
     }
 }
 
+/// Classify a failure to launch the ngspice `program`.
+fn spawn_error(program: &str, source: std::io::Error) -> NgspiceError {
+    let program = program.to_owned();
+    if source.kind() == std::io::ErrorKind::NotFound {
+        NgspiceError::NotInstalled { program, source }
+    } else {
+        NgspiceError::Spawn { program, source }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NgspiceError {
-    #[error("could not launch ngspice")]
-    Spawn(#[source] std::io::Error),
+    #[error(
+        "{program} was not found on PATH; install ngspice, or enter the nix dev shell"
+    )]
+    NotInstalled {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not launch {program}")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("io error while running ngspice")]
     Io(#[source] std::io::Error),
 
-    #[error("ngspice exited with status {code:?}:\n{stderr}")]
+    #[error("ngspice failed ({}):\n{stderr}", exit_reason(*code))]
     Exec { code: Option<i32>, stderr: String },
 
     #[error("could not parse ngspice rawfile: {0}")]
@@ -527,5 +551,28 @@ Values:
         assert!(deck.contains("\nwrite /tmp/out.raw\n"));
         assert!(deck.contains("\n.endc\n"));
         assert!(deck.ends_with(".end\n"));
+    }
+
+    #[test]
+    fn absent_ngspice_points_at_path() {
+        let ngspice = Ngspice {
+            binary: "kitest-no-such-ngspice".into(),
+        };
+        let err = ngspice.run_op("* t\n", &[]).expect_err("binary is absent");
+        let message = err.to_string();
+        assert!(matches!(err, NgspiceError::NotInstalled { .. }), "{err:?}");
+        assert!(message.contains("kitest-no-such-ngspice"), "{message}");
+        assert!(message.contains("PATH"), "{message}");
+    }
+
+    #[test]
+    fn failed_run_reports_exit_status_without_option_debug() {
+        let message = NgspiceError::Exec {
+            code: Some(1),
+            stderr: "boom".into(),
+        }
+        .to_string();
+        assert!(message.contains("exit status 1"), "{message}");
+        assert!(!message.contains("Some("), "{message}");
     }
 }
