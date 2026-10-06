@@ -1,6 +1,6 @@
 use kitest::{
-    Backend, CheckError, Config, ModelLibrary, Ngspice, SupplyProblem, Tran,
-    check_project, export_design, export_netlist,
+    Backend, CheckError, Config, Design, ModelLibrary, Ngspice, PinKind,
+    SupplyProblem, Tran, check_project, export_design, export_netlist,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,36 +33,144 @@ fn exports_divider_matching_golden() {
     assert_eq!(elements(&netlist), elements(&golden));
 }
 
+/// Every net's pins as `(reference, pin, kind)`, sorted, by net name.
+fn connectivity(design: &Design) -> BTreeMap<&str, Vec<(&str, &str, PinKind)>> {
+    design
+        .nets
+        .iter()
+        .map(|net| {
+            let mut pins: Vec<_> = net
+                .nodes
+                .iter()
+                .map(|node| {
+                    (node.reference.as_str(), node.pin.as_str(), node.kind)
+                })
+                .collect();
+            pins.sort_unstable_by_key(|&(reference, pin, _)| (reference, pin));
+            (net.name.as_str(), pins)
+        })
+        .collect()
+}
+
+/// Every component as `(reference, value, "library:part")`, sorted.
+fn parts_list(design: &Design) -> Vec<(&str, &str, String)> {
+    let mut parts: Vec<_> = design
+        .components
+        .iter()
+        .map(|c| {
+            let id = format!("{}:{}", c.library.library, c.library.part);
+            (c.reference.as_str(), c.value.as_str(), id)
+        })
+        .collect();
+    parts.sort_unstable();
+    parts
+}
+
+// The two tests below state what the examples are drawn as, written by hand
+// from the schematics. Comparing against a recorded export instead would pass
+// on a broken reader once the recording is regenerated for a new KiCad.
+
 #[test]
-fn reads_the_drawn_colpitts_as_a_design() {
+fn reads_the_divider_as_drawn() {
+    let design =
+        export_design(Path::new(&format!("{DIVIDER}/divider.kicad_sch")))
+            .unwrap();
+    use PinKind::Passive as P;
+
+    assert_eq!(design.rails, ["+5V", "GND"]);
+    assert_eq!(
+        parts_list(&design),
+        [
+            ("R1", "10k", "Device:R_US".into()),
+            ("R2", "10k", "Device:R_US".into()),
+        ]
+    );
+    assert_eq!(
+        connectivity(&design),
+        BTreeMap::from([
+            ("+5V", vec![("R1", "1", P)]),
+            ("/out", vec![("R1", "2", P), ("R2", "1", P)]),
+            ("GND", vec![("R2", "2", P)]),
+        ])
+    );
+}
+
+#[test]
+fn reads_the_colpitts_as_drawn() {
     let design =
         export_design(Path::new(&format!("{COLPITTS}/colpitts.kicad_sch")))
             .unwrap();
+    use PinKind::{Input as I, Passive as P};
 
     assert_eq!(design.rails, ["GND", "VCC"]);
-    assert!(
-        design
-            .components
-            .iter()
-            .all(|c| !c.reference.starts_with('#')),
-        "power symbols are rails, not components"
+    assert_eq!(
+        parts_list(&design),
+        [
+            ("C1", "470pF", "Device:C".into()),
+            ("C2", "470pF", "Device:C".into()),
+            ("C3", "100nF", "Device:C".into()),
+            ("L1", "1uH", "Device:L".into()),
+            ("PRB1", "COLPITTS_OUT", "kitest:Probe".into()),
+            ("Q1", "2N3904", "Transistor_BJT:2N3904".into()),
+            ("R1", "47k", "Device:R_US".into()),
+            ("R2", "47k", "Device:R_US".into()),
+            ("R3", "4.7k", "Device:R_US".into()),
+        ]
+    );
+    assert_eq!(
+        connectivity(&design),
+        BTreeMap::from([
+            (
+                "/OUT",
+                vec![
+                    ("C1", "2", P),
+                    ("C2", "1", P),
+                    ("PRB1", "1", P),
+                    ("Q1", "1", P),
+                    ("R3", "1", P),
+                ]
+            ),
+            (
+                "GND",
+                vec![
+                    ("C2", "2", P),
+                    ("C3", "2", P),
+                    ("R2", "2", P),
+                    ("R3", "2", P)
+                ]
+            ),
+            ("Net-(C3-Pad1)", vec![("C3", "1", P), ("L1", "2", P)]),
+            (
+                "Net-(Q1-B)",
+                vec![
+                    ("C1", "1", P),
+                    ("L1", "1", P),
+                    ("Q1", "2", I),
+                    ("R1", "2", P),
+                    ("R2", "1", P),
+                ]
+            ),
+            ("VCC", vec![("Q1", "3", P), ("R1", "1", P)]),
+        ])
     );
 
-    let q1 = design.component("Q1").expect("Q1 present");
-    assert_eq!(q1.value, "2N3904");
-    assert_eq!(q1.pins["1"], "/OUT");
-    assert_eq!(q1.pins["3"], "VCC");
-
-    let part = design.part(q1).expect("2N3904 definition present");
-    let roles: Vec<_> = ["1", "2", "3"]
+    let q1 = design.component("Q1").unwrap();
+    let part = design.part(q1).unwrap();
+    let pins: Vec<_> = part
+        .pins
         .iter()
-        .map(|number| part.pin(number).expect("pin").name.as_str())
+        .map(|pin| (pin.number.as_str(), pin.name.as_str(), pin.kind))
         .collect();
-    assert_eq!(roles, ["E", "B", "C"]);
-    assert_eq!(part.fields["Sim.Device"], "NPN");
-    assert_eq!(part.fields["Sim.Pins"], "1=E 2=B 3=C");
+    assert_eq!(pins, [("1", "E", P), ("2", "B", I), ("3", "C", P)]);
+    for fields in [&part.fields, &q1.fields] {
+        assert_eq!(fields["Sim.Device"], "NPN");
+        assert_eq!(fields["Sim.Pins"], "1=E 2=B 3=C");
+    }
 
-    assert!(!design.net("VCC").expect("VCC net").is_driven());
+    let probe = design.component("PRB1").unwrap();
+    assert!(probe.fields.contains_key("Expect"));
+    assert!(probe.excluded_from_sim);
+    assert!(!design.net("VCC").unwrap().is_driven());
 }
 
 #[test]
