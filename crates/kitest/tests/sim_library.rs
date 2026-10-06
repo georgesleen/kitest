@@ -14,8 +14,8 @@ const VENDOR_MODEL: &str = "* vendor model\n\
 + cjc=3.638p mjc=.3085 vjc=.75 fc=.5 cje=4.493p mje=.2593 vje=.75\n\
 + tr=239.5n tf=301.2p itf=.4 vtf=4 xtf=2 rb=10)\n";
 
-/// The colpitts copied to a temporary project whose Q1 names `models/q.lib`.
-fn project_with_model_file() -> tempfile::TempDir {
+/// The colpitts copied to a temporary project.
+fn colpitts_copy() -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
     for entry in std::fs::read_dir(COLPITTS).unwrap() {
         let entry = entry.unwrap();
@@ -24,26 +24,50 @@ fn project_with_model_file() -> tempfile::TempDir {
             std::fs::copy(entry.path(), to).unwrap();
         }
     }
+    project
+}
+
+/// The colpitts copied to a temporary project whose Q1 names `models/q.lib`.
+fn project_with_model_file() -> tempfile::TempDir {
+    let project = colpitts_copy();
     let models = project.path().join("models");
     std::fs::create_dir(&models).unwrap();
     std::fs::write(models.join("q.lib"), VENDOR_MODEL).unwrap();
-    add_model_fields(&project.path().join("colpitts.kicad_sch"));
+    let sch = project.path().join("colpitts.kicad_sch");
+    add_model_fields(&sch, "${KIPRJMOD}/models/q.lib", "Q2N3904_VENDOR");
     project
 }
 
 /// Give Q1 in `sch` a Sim.Library and Sim.Name, beside its Sim.Device.
-fn add_model_fields(sch: &Path) {
+fn add_model_fields(sch: &Path, library: &str, name: &str) {
     let text = std::fs::read_to_string(sch).unwrap();
     let q1 = text.find("(property \"Reference\" \"Q1\"").unwrap();
     let at = q1 + text[q1..].find("(property \"Sim.Device\"").unwrap();
-    let fields = concat!(
-        "(property \"Sim.Library\" \"${KIPRJMOD}/models/q.lib\"",
-        " (at 0 0 0) (hide yes))\n\t\t",
-        "(property \"Sim.Name\" \"Q2N3904_VENDOR\"",
-        " (at 0 0 0) (hide yes))\n\t\t",
+    let fields = format!(
+        "(property \"Sim.Library\" \"{library}\" (at 0 0 0) (hide yes))\n\t\t\
+         (property \"Sim.Name\" \"{name}\" (at 0 0 0) (hide yes))\n\t\t"
     );
     let edited = format!("{}{fields}{}", &text[..at], &text[at..]);
     std::fs::write(sch, edited).unwrap();
+}
+
+#[test]
+fn a_path_through_a_variable_only_kicad_sets_resolves_as_kicad_resolves_it() {
+    let project = colpitts_copy();
+    let sch = project.path().join("colpitts.kicad_sch");
+    let library = "${KICAD9_SYMBOL_DIR}/Simulation_SPICE.sp";
+    add_model_fields(&sch, library, "kicad_builtin_vdiff");
+    assert!(std::env::var_os("KICAD9_SYMBOL_DIR").is_none());
+
+    let design = export_design(&sch).unwrap();
+    let q1 = design
+        .components
+        .iter()
+        .find(|component| component.reference == "Q1")
+        .unwrap();
+    let path = Path::new(&q1.fields["Sim.Library"]);
+    assert!(path.ends_with("Simulation_SPICE.sp"), "{}", path.display());
+    assert!(path.is_file(), "{}", path.display());
 }
 
 #[test]
