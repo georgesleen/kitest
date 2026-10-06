@@ -18,12 +18,11 @@ target
 /result-*
 .direnv/
 
-# Python / uv
-.venv/
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
-# Compiled extension maturin drops into the source tree on editable install
+# The compiled extension make pytest links into the package source
 *.so
 
 # RustRover
