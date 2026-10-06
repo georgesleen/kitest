@@ -51,13 +51,31 @@ fn add_model_fields(sch: &Path, library: &str, name: &str) {
     std::fs::write(sch, edited).unwrap();
 }
 
+/// Set in the child process that runs a test body with an isolated
+/// environment.
+const ISOLATED: &str = "KITEST_TEST_ISOLATED";
+
 #[test]
 fn a_path_through_a_variable_only_kicad_sets_resolves_as_kicad_resolves_it() {
+    // The variable must be unset, as it is outside KiCad. Removing it in
+    // this process would race the other tests, so a child runs the body.
+    if std::env::var_os(ISOLATED).is_none() {
+        let name = "a_path_through_a_variable_only_kicad_sets_resolves_as_kicad_resolves_it";
+        let status =
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([name, "--exact", "--nocapture"])
+                .env(ISOLATED, "1")
+                .env_remove("KICAD9_SYMBOL_DIR")
+                .status()
+                .unwrap();
+        assert!(status.success(), "the isolated run failed");
+        return;
+    }
+
     let project = colpitts_copy();
     let sch = project.path().join("colpitts.kicad_sch");
     let library = "${KICAD9_SYMBOL_DIR}/Simulation_SPICE.sp";
     add_model_fields(&sch, library, "kicad_builtin_vdiff");
-    assert!(std::env::var_os("KICAD9_SYMBOL_DIR").is_none());
 
     let design = export_design(&sch).unwrap();
     let q1 = design

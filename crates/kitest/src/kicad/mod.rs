@@ -134,7 +134,7 @@ fn resolve_through_kicad(
     }
     // KiCad exits 2 when any part's model looks inconsistent to it, yet still
     // writes the netlist with every include resolved, so read it regardless.
-    let Ok((_, Some(spice))) = export(sch, "spice") else {
+    let Ok((_, Ok(spice))) = export(sch, "spice") else {
         return;
     };
     let includes: Vec<&str> = spice
@@ -174,20 +174,16 @@ fn run_export(sch: &Path, format: &str) -> Result<String, KicadError> {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
-    file.ok_or_else(|| {
-        KicadError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "kicad-cli reported success but wrote no netlist",
-        ))
-    })
+    file.map_err(KicadError::Io)
 }
 
 /// Run `kicad-cli sch export netlist` on `sch` in `format`: its process
-/// output, and the file it wrote, if it wrote one, whatever its exit status.
+/// output, and the result of reading the file it was told to write, whatever
+/// its exit status.
 fn export(
     sch: &Path,
     format: &str,
-) -> Result<(std::process::Output, Option<String>), KicadError> {
+) -> Result<(std::process::Output, std::io::Result<String>), KicadError> {
     if matches!(sch.try_exists(), Ok(false)) {
         return Err(KicadError::MissingSchematic {
             path: sch.to_path_buf(),
@@ -204,7 +200,7 @@ fn export(
         .arg(sch)
         .output()
         .map_err(spawn_error)?;
-    Ok((output, std::fs::read_to_string(&out_path).ok()))
+    Ok((output, std::fs::read_to_string(&out_path)))
 }
 
 /// Classify a failure to launch kicad-cli.
