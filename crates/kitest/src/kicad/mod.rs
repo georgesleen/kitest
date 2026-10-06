@@ -62,6 +62,7 @@ pub fn export_design(sch: &Path) -> Result<Design, KicadError> {
     for part in parts.values_mut() {
         resolve_model_file(&mut part.fields, project);
     }
+    resolve_through_kicad(sch, &mut components, &mut parts);
 
     Ok(Design {
         components,
@@ -109,8 +110,84 @@ fn resolve_model_file(
     *path = resolved.display().to_string();
 }
 
+/// Resolve `Sim.Library` paths left holding a `${VAR}` KiCad sets only in
+/// its own process, such as `${KICAD9_SYMBOL_DIR}` on KiCad's stock
+/// simulation symbols, from the `.include` lines of KiCad's own SPICE
+/// export. A path keeps its variable if KiCad cannot export or names no
+/// single file ending as it does.
+fn resolve_through_kicad(
+    sch: &Path,
+    components: &mut [Component],
+    parts: &mut std::collections::BTreeMap<LibraryId, LibraryPart>,
+) {
+    let unresolved = |fields: &std::collections::BTreeMap<String, String>| {
+        fields
+            .get(element::SIM_LIBRARY)
+            .is_some_and(|path| path.contains("${"))
+    };
+    let any = components
+        .iter()
+        .any(|component| unresolved(&component.fields))
+        || parts.values().any(|part| unresolved(&part.fields));
+    if !any {
+        return;
+    }
+    // KiCad exits 2 when any part's model looks inconsistent to it, yet still
+    // writes the netlist with every include resolved, so read it regardless.
+    let Ok((_, Some(spice))) = export(sch, "spice") else {
+        return;
+    };
+    let includes: Vec<&str> = spice
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(".include "))
+        .map(|path| path.trim().trim_matches('"'))
+        .collect();
+    let fields = components
+        .iter_mut()
+        .map(|component| &mut component.fields)
+        .chain(parts.values_mut().map(|part| &mut part.fields));
+    for fields in fields {
+        let Some(path) = fields.get_mut(element::SIM_LIBRARY) else {
+            continue;
+        };
+        let Some(close) = path.rfind('}').filter(|_| path.contains("${"))
+        else {
+            continue;
+        };
+        let tail = &path[close + 1..];
+        let mut matching = includes
+            .iter()
+            .filter(|include| !tail.is_empty() && include.ends_with(tail));
+        if let (Some(include), None) = (matching.next(), matching.next()) {
+            *path = (*include).to_owned();
+        }
+    }
+}
+
 /// Run `kicad-cli sch export netlist` on `sch` in `format` and return the file.
 fn run_export(sch: &Path, format: &str) -> Result<String, KicadError> {
+    let (output, file) = export(sch, format)?;
+    if !output.status.success() {
+        return Err(KicadError::Exec {
+            path: sch.to_path_buf(),
+            code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    file.ok_or_else(|| {
+        KicadError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "kicad-cli reported success but wrote no netlist",
+        ))
+    })
+}
+
+/// Run `kicad-cli sch export netlist` on `sch` in `format`: its process
+/// output, and the file it wrote, if it wrote one, whatever its exit status.
+fn export(
+    sch: &Path,
+    format: &str,
+) -> Result<(std::process::Output, Option<String>), KicadError> {
     if matches!(sch.try_exists(), Ok(false)) {
         return Err(KicadError::MissingSchematic {
             path: sch.to_path_buf(),
@@ -127,16 +204,7 @@ fn run_export(sch: &Path, format: &str) -> Result<String, KicadError> {
         .arg(sch)
         .output()
         .map_err(spawn_error)?;
-
-    if !output.status.success() {
-        return Err(KicadError::Exec {
-            path: sch.to_path_buf(),
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-
-    std::fs::read_to_string(&out_path).map_err(KicadError::Io)
+    Ok((output, std::fs::read_to_string(&out_path).ok()))
 }
 
 /// Classify a failure to launch kicad-cli.
