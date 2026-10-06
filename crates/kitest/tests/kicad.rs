@@ -202,6 +202,21 @@ fn a_supply_reached_through_an_undeclared_label_is_named_in_the_failure() {
 }
 
 #[test]
+fn an_oscillation_check_on_a_crystal_design_says_it_is_unsupported() {
+    let mut design = colpitts_expecting("oscillates(near=10.115e6, within=2%)");
+    let mut crystal = design.components[0].clone();
+    crystal.reference = "Y1".into();
+    crystal.excluded_from_sim = true;
+    design.components.push(crystal);
+    let config = Config::for_project(Path::new(COLPITTS)).unwrap();
+    let report = design.check(&config, &Ngspice::default()).unwrap();
+
+    let check = report.outcomes[0].check.as_ref().expect("a check ran");
+    assert!(!check.passed());
+    assert!(check.message().starts_with("Y1 is a crystal"), "{check}");
+}
+
+#[test]
 fn the_colpitts_probe_checks_its_dc_bias() {
     let design = colpitts_expecting("dc(near=3.7, within=abs(0.1))");
     let config = Config::for_project(Path::new(COLPITTS)).expect("config");

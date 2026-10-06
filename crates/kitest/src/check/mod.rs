@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::analysis::si;
 use crate::kicad::{is_ground, is_spice_ground, node_name};
 use crate::{
-    Backend, Check, Config, ConfigError, Corner, Design, KicadError,
+    Backend, Check, Component, Config, ConfigError, Corner, Design, KicadError,
     ModelError, ModelLibrary, Net, Netlist, NetlistError, Ngspice, Power,
     Probe, ProbeError, Signal, SupplyError, Tolerance, Tran, TranSource,
     Transient, export_design,
@@ -152,6 +152,11 @@ impl Design {
         let netlist = self.netlist(&libraries)?;
         let power = self.power(&config.supplies)?;
         let labelled = self.labelled_nets(&power);
+        let crystal = self
+            .components
+            .iter()
+            .find(|component| !component.dnp && is_crystal(component))
+            .map(|component| component.reference.as_str());
 
         let mut outcomes = Vec::new();
         for corner in power.corners() {
@@ -161,6 +166,7 @@ impl Design {
                 &probes,
                 &expectations,
                 &labelled,
+                crystal,
                 backend,
             )
             .map_err(|error| CheckError::Simulation(Box::new(error)))?;
@@ -217,6 +223,7 @@ fn check_corner<B: Backend>(
     probes: &[Probe<'_>],
     expectations: &[Option<Expectation>],
     labelled: &[&str],
+    crystal: Option<&str>,
     backend: &B,
 ) -> Result<Vec<Outcome>, B::Error> {
     let voltages: Vec<(String, f64)> = corner
@@ -248,17 +255,20 @@ fn check_corner<B: Backend>(
                 };
                 (Some(check), None)
             }
-            Some(Expectation::Oscillates { near, within }) => {
-                let (check, waveform) = oscillation(
-                    backend,
-                    &netlist.text,
-                    corner.tran_sources(),
-                    probe.net(),
-                    near,
-                    within,
-                )?;
-                (Some(check), waveform)
-            }
+            Some(Expectation::Oscillates { near, within }) => match crystal {
+                Some(crystal) => (Some(crystal_unsupported(crystal)), None),
+                None => {
+                    let (check, waveform) = oscillation(
+                        backend,
+                        &netlist.text,
+                        corner.tran_sources(),
+                        probe.net(),
+                        near,
+                        within,
+                    )?;
+                    (Some(check), waveform)
+                }
+            },
         };
         let failed = check.as_ref().is_some_and(|check| !check.passed());
         let diagnosis = if failed {
@@ -468,6 +478,32 @@ impl Envelope {
             ),
         ))
     }
+}
+
+/// True if `component` is a quartz crystal: a `Y` reference, as KiCad
+/// annotates crystals, or a symbol from KiCad's crystal symbols.
+fn is_crystal(component: &Component) -> bool {
+    let mut reference = component.reference.chars();
+    let y_reference = reference.next() == Some('Y')
+        && reference.next().is_some_and(|c| c.is_ascii_digit());
+    y_reference
+        || component.library.library == "Crystal"
+        || component.library.part.starts_with("Crystal")
+}
+
+/// The failed check for an oscillation probe on a design with `crystal`.
+fn crystal_unsupported(crystal: &str) -> Check {
+    let longest = RUN_CYCLES[RUN_CYCLES.len() - 1];
+    Check::new(
+        false,
+        format!(
+            "{crystal} is a crystal, and oscillates cannot check a crystal \
+             oscillator yet: a crystal's Q of 10^4 to 10^6 needs far more \
+             cycles to start than kitest's longest run of {longest}, so the \
+             check would read \"still starting\" or pass a resonance that is \
+             only ringing"
+        ),
+    )
 }
 
 fn missing(net: &Net) -> Check {

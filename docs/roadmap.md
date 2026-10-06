@@ -37,6 +37,9 @@ particular circuit is supposed to do, which only the designer knows.
   bias, each BJT off, saturated or active, and a labelled net at 0 V on a
   collector or drain named as an undriven supply. `kitest --show PROBE`
   sketches the waveform an oscillation check ran on, in the terminal.
+- An oscillation check on a design with a crystal says crystal
+  oscillators are not supported yet, instead of a misleading "still
+  starting": a Q of 10^4 to 10^6 outruns the longest transient.
 
 ```mermaid
 graph TD
