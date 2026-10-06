@@ -39,6 +39,22 @@
               kicad-small
             ];
 
+            # kitest-scope's window loads these at run time (eframe dlopens
+            # OpenGL and the Wayland or X11 client libraries), so they are put
+            # on the loader path rather than linked.
+            env.LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
+              with pkgs;
+              [
+                libGL
+                libxkbcommon
+                wayland
+                libx11
+                libxcursor
+                libxi
+                libxrandr
+                vulkan-loader
+              ]
+            );
           };
         }
       );

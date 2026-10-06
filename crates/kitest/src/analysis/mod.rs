@@ -20,6 +20,8 @@ pub use voltage::Voltage;
 
 use std::collections::BTreeMap;
 
+use kitest_scope::{AcTrace, Capture, Trace};
+
 use num_complex::Complex64;
 
 /// DC operating-point voltages, one value per node.
@@ -80,6 +82,21 @@ impl Transient {
     pub fn nodes(&self) -> Vec<&str> {
         self.signals.keys().map(String::as_str).collect()
     }
+
+    /// Every node's waveform as a scope capture.
+    pub fn capture(&self) -> Capture {
+        Capture::Transient {
+            time: self.time.clone(),
+            traces: self
+                .signals
+                .iter()
+                .map(|(name, values)| Trace {
+                    name: name.clone(),
+                    values: values.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Frequency-domain responses from an AC analysis.
@@ -109,6 +126,22 @@ impl Spectra {
     /// The node names present in the result.
     pub fn nodes(&self) -> Vec<&str> {
         self.signals.keys().map(String::as_str).collect()
+    }
+
+    /// Every node's response as a scope capture, for a Bode plot.
+    pub fn capture(&self) -> Capture {
+        Capture::Ac {
+            frequency: self.frequency.clone(),
+            traces: self
+                .signals
+                .iter()
+                .map(|(name, values)| AcTrace {
+                    name: name.clone(),
+                    re: values.iter().map(|value| value.re).collect(),
+                    im: values.iter().map(|value| value.im).collect(),
+                })
+                .collect(),
+        }
     }
 }
 
