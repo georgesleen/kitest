@@ -66,6 +66,16 @@ impl Transient {
         Some(Signal::new(&self.time, self.signals.get(&key(node))?))
     }
 
+    /// The time axis and `node`'s values, consuming the result, or `None`
+    /// if that node is absent.
+    pub(crate) fn into_node(
+        mut self,
+        node: &str,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        let values = self.signals.remove(&key(node))?;
+        Some((self.time, values))
+    }
+
     /// The node names present in the result.
     pub fn nodes(&self) -> Vec<&str> {
         self.signals.keys().map(String::as_str).collect()

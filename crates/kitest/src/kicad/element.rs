@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use super::netlist::NetlistError;
+use super::netlist::{NetlistError, Transistor};
 use super::pins::pin_roles;
 use super::value::{self, Unit};
 use super::{Component, LibraryPart};
@@ -32,6 +32,8 @@ pub(crate) struct Element<'a> {
     pub(crate) card: Option<Cow<'a, str>>,
     /// True if the card is a default one rather than a real part model.
     pub(crate) defaulted: bool,
+    /// The part's terminals, if it is a transistor bound to a `.model`.
+    pub(crate) transistor: Option<Transistor>,
 }
 
 /// `component` as a SPICE element, with nets named by `nodes`.
@@ -231,6 +233,7 @@ impl Passive {
             ),
             card: None,
             defaulted: false,
+            transistor: None,
         })
     }
 }
@@ -353,6 +356,19 @@ impl Device {
             })
             .collect()
     }
+
+    /// `component` as a transistor on `nodes`, or `None` for a diode.
+    fn transistor(
+        &self,
+        component: &Component,
+        nodes: &[&str],
+    ) -> Option<Transistor> {
+        (self.letter != 'D').then(|| Transistor {
+            reference: component.reference.clone(),
+            model_type: self.model_type,
+            nodes: nodes.iter().map(|&node| node.to_owned()).collect(),
+        })
+    }
 }
 
 /// `component` bound to a model of `kind`, whose definition is `card`.
@@ -364,7 +380,7 @@ fn modelled<'a>(
     sim_device: Option<&str>,
     nodes: &BTreeMap<&str, Cow<'_, str>>,
 ) -> Result<Element<'a>, NetlistError> {
-    let (letter, ordered, model) = match kind {
+    let (letter, ordered, model, transistor) = match kind {
         ModelKind::Model { name, device } => {
             let chosen = Device::by_model_type(device).ok_or_else(|| {
                 NetlistError::UnsupportedDevice {
@@ -383,7 +399,9 @@ fn modelled<'a>(
                     model_type: device.clone(),
                 });
             }
-            (chosen.letter, chosen.nodes(component, part, nodes)?, name)
+            let ordered = chosen.nodes(component, part, nodes)?;
+            let transistor = chosen.transistor(component, &ordered);
+            (chosen.letter, ordered, name, transistor)
         }
         ModelKind::Subckt { name, ports } => {
             let roles: Vec<&str> = ports.iter().map(String::as_str).collect();
@@ -397,7 +415,7 @@ fn modelled<'a>(
                     node(component, pin, nodes)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            (SUBCIRCUIT_LETTER, ordered, name)
+            (SUBCIRCUIT_LETTER, ordered, name, None)
         }
     };
     Ok(Element {
@@ -408,6 +426,7 @@ fn modelled<'a>(
         ),
         card: Some(card),
         defaulted: false,
+        transistor,
     })
 }
 
@@ -436,17 +455,19 @@ fn defaulted<'a>(
         .get(SIM_PARAMS)
         .map(|parameters| format!(" ({parameters})"))
         .unwrap_or_default();
+    let ordered = device.nodes(component, part, nodes)?;
     Ok(Element {
         line: format!(
             "{} {} {model}",
             element_name(device.letter, &component.reference),
-            device.nodes(component, part, nodes)?.join(" "),
+            ordered.join(" "),
         ),
         card: Some(Cow::Owned(format!(
             ".model {model} {}{parameters}",
             device.model_type
         ))),
         defaulted: true,
+        transistor: device.transistor(component, &ordered),
     })
 }
 

@@ -1,5 +1,6 @@
 //! Running every probe's expectation against a design and reporting each.
 
+mod diagnosis;
 mod expect;
 
 pub use expect::{ExpectError, Expectation, parse as parse_expectation};
@@ -7,11 +8,12 @@ pub use expect::{ExpectError, Expectation, parse as parse_expectation};
 use std::path::{Path, PathBuf};
 
 use crate::analysis::si;
-use crate::kicad::node_name;
+use crate::kicad::{is_ground, is_spice_ground, node_name};
 use crate::{
     Backend, Check, Config, ConfigError, Corner, Design, KicadError,
-    ModelError, ModelLibrary, Net, NetlistError, Ngspice, Probe, ProbeError,
-    Signal, SupplyError, Tolerance, Tran, TranSource, export_design,
+    ModelError, ModelLibrary, Net, Netlist, NetlistError, Ngspice, Power,
+    Probe, ProbeError, Signal, SupplyError, Tolerance, Tran, TranSource,
+    Transient, export_design,
 };
 
 /// Output samples per expected cycle.
@@ -33,6 +35,8 @@ const MAX_KICK_VOLTS: f64 = 0.5;
 const SIZED_KICK_VOLTS: f64 = 0.2;
 /// Cycles after the start in which the kick's step is read.
 const KICK_STEP_CYCLES: f64 = 0.1;
+/// Prefixes of the names KiCad gives nets no label names.
+const AUTO_NET_PREFIXES: [&str; 2] = ["Net-(", "unconnected-("];
 
 /// One probe's result at one corner.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +51,20 @@ pub struct Outcome {
     pub corner: Vec<(String, f64)>,
     /// The check, or `None` for a probe with no `Expect`.
     pub check: Option<Check>,
+    /// For a failed check, what the corner's operating point says about it:
+    /// the probe net's bias, each transistor's bias, and undriven supplies.
+    pub diagnosis: Vec<String>,
+    /// The probe's net over an oscillation check's final run.
+    pub waveform: Option<Waveform>,
+}
+
+/// One net's voltage over a transient run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Waveform {
+    pub time: Vec<f64>,
+    pub volts: Vec<f64>,
+    /// The frequency the check expected, in hertz.
+    pub expected_hertz: f64,
 }
 
 impl Outcome {
@@ -133,14 +151,16 @@ impl Design {
         libraries.push(ModelLibrary::bundled());
         let netlist = self.netlist(&libraries)?;
         let power = self.power(&config.supplies)?;
+        let labelled = self.labelled_nets(&power);
 
         let mut outcomes = Vec::new();
         for corner in power.corners() {
             let corner_outcomes = check_corner(
-                &netlist.text,
+                &netlist,
                 &corner,
                 &probes,
                 &expectations,
+                &labelled,
                 backend,
             )
             .map_err(|error| CheckError::Simulation(Box::new(error)))?;
@@ -152,6 +172,23 @@ impl Design {
                 .position(|probe| probe.reference() == outcome.reference)
         });
         Ok(Report { outcomes })
+    }
+
+    /// Nets named by a label, not by KiCad, that `power` neither sources
+    /// nor grounds.
+    fn labelled_nets(&self, power: &Power) -> Vec<&str> {
+        self.nets
+            .iter()
+            .map(|net| net.name.as_str())
+            .filter(|name| {
+                !AUTO_NET_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                    && !is_ground(name)
+                    && !is_spice_ground(name)
+                    && !power.rails().iter().any(|rail| rail.net() == *name)
+            })
+            .collect()
     }
 }
 
@@ -175,10 +212,11 @@ fn expectations(
 }
 
 fn check_corner<B: Backend>(
-    netlist: &str,
+    netlist: &Netlist,
     corner: &Corner<'_>,
     probes: &[Probe<'_>],
     expectations: &[Option<Expectation>],
+    labelled: &[&str],
     backend: &B,
 ) -> Result<Vec<Outcome>, B::Error> {
     let voltages: Vec<(String, f64)> = corner
@@ -188,8 +226,8 @@ fn check_corner<B: Backend>(
     let needs_op = expectations
         .iter()
         .any(|expectation| matches!(expectation, Some(Expectation::Dc { .. })));
-    let op = if needs_op {
-        Some(backend.run_op(netlist, &corner.dc_supplies())?)
+    let mut op = if needs_op {
+        Some(backend.run_op(&netlist.text, &corner.dc_supplies())?)
     } else {
         None
     };
@@ -197,28 +235,44 @@ fn check_corner<B: Backend>(
     let mut outcomes = Vec::new();
     for (probe, expectation) in probes.iter().zip(expectations) {
         let node = &probe.net().name;
-        let check = match *expectation {
-            None => None,
+        let (check, waveform) = match *expectation {
+            None => (None, None),
             Some(Expectation::Dc { near, within }) => {
                 let op =
                     op.as_ref().expect("an operating point ran for a dc check");
-                Some(match op.node(node) {
+                let check = match op.node(node) {
                     Some(voltage) => {
                         Check::near(voltage.volts(), near, within, "V")
                     }
                     None => missing(probe.net()),
-                })
+                };
+                (Some(check), None)
             }
             Some(Expectation::Oscillates { near, within }) => {
-                Some(oscillation(
+                let (check, waveform) = oscillation(
                     backend,
-                    netlist,
+                    &netlist.text,
                     corner.tran_sources(),
                     probe.net(),
                     near,
                     within,
-                )?)
+                )?;
+                (Some(check), waveform)
             }
+        };
+        let failed = check.as_ref().is_some_and(|check| !check.passed());
+        let diagnosis = if failed {
+            if op.is_none() {
+                op =
+                    Some(backend.run_op(&netlist.text, &corner.dc_supplies())?);
+            }
+            let op = op.as_ref().expect("an operating point ran");
+            let measured_dc =
+                matches!(expectation, Some(Expectation::Dc { .. }));
+            let probe_net = (!measured_dc).then_some(node.as_str());
+            diagnosis::diagnose(op, probe_net, &netlist.transistors, labelled)
+        } else {
+            Vec::new()
         };
         outcomes.push(Outcome {
             probe: probe.name().to_owned(),
@@ -226,6 +280,8 @@ fn check_corner<B: Backend>(
             net: probe.net().name.clone(),
             corner: voltages.clone(),
             check,
+            diagnosis,
+            waveform,
         });
     }
     Ok(outcomes)
@@ -245,7 +301,7 @@ fn oscillation<B: Backend>(
     net: &Net,
     near: f64,
     within: Tolerance,
-) -> Result<Check, B::Error> {
+) -> Result<(Check, Option<Waveform>), B::Error> {
     let node = node_name(&net.name);
     let mut amps = KICK_AMPS;
     let mut sized = false;
@@ -269,19 +325,19 @@ fn oscillation<B: Backend>(
             }
         }
         let Some(signal) = result.node(&net.name) else {
-            return Ok(missing(net));
+            return Ok((missing(net), None));
         };
         let envelope = Envelope::measure(&signal, near);
         if let Some(check) = envelope.verdict(cycles, near, within, &signal) {
-            return Ok(check);
+            return Ok((check, waveform(result, net, near)));
         }
-        last = Some(envelope);
+        last = Some((envelope, result));
     }
-    let envelope = last.expect("at least one run");
+    let (envelope, result) = last.expect("at least one run");
     let cycles = RUN_CYCLES[RUN_CYCLES.len() - 1];
     let amplitude = si(envelope.amplitude(), "V");
     let change = envelope.change() * 100.0;
-    Ok(Check::new(
+    let check = Check::new(
         false,
         if envelope.change() > 0.0 {
             format!(
@@ -296,7 +352,18 @@ fn oscillation<B: Backend>(
                 -change
             )
         },
-    ))
+    );
+    Ok((check, waveform(result, net, near)))
+}
+
+/// `net`'s waveform out of `result`, a run expecting `near` hertz.
+fn waveform(result: Transient, net: &Net, near: f64) -> Option<Waveform> {
+    let (time, volts) = result.into_node(&net.name)?;
+    Some(Waveform {
+        time,
+        volts,
+        expected_hertz: near,
+    })
 }
 
 /// The largest move away from the starting voltage in the first
@@ -472,6 +539,7 @@ mod tests {
             Tolerance::percent(5.0),
         )
         .expect("simulation ran")
+        .0
     }
 
     #[test]

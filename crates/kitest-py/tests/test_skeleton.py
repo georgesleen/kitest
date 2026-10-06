@@ -105,6 +105,7 @@ def test_check_project_reports_a_failed_probe_with_its_measurement(tmp_path):
     check = outcome.check()
     assert not check
     assert "from 12 MHz" in str(check)
+    assert any(line.startswith("Q1 (npn) is active") for line in outcome.diagnosis())
 
 
 def test_check_project_rejects_an_unreadable_expect(tmp_path):

@@ -17,6 +17,18 @@ pub struct Netlist {
     pub text: String,
     /// Parts simulated on a default model because no library covers them.
     pub defaulted: Vec<String>,
+    /// Every transistor bound to a `.model`, for diagnosing its bias.
+    pub transistors: Vec<Transistor>,
+}
+
+/// A transistor as simulated: its model type and its terminals' nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transistor {
+    pub reference: String,
+    /// The `.model` type, such as `npn`, `pmos`, or `njf`.
+    pub model_type: &'static str,
+    /// SPICE nodes in role order: C B E for a BJT, D G S for a FET.
+    pub nodes: Vec<String>,
 }
 
 impl Design {
@@ -32,6 +44,7 @@ impl Design {
         let mut lines = vec![TITLE.to_owned()];
         let mut cards: Vec<Cow<'_, str>> = Vec::new();
         let mut defaulted = Vec::new();
+        let mut transistors = Vec::new();
         let mut errors = Vec::new();
 
         let simulated = self
@@ -56,6 +69,9 @@ impl Design {
             if element.defaulted {
                 defaulted.push(component.reference.clone());
             }
+            if let Some(transistor) = element.transistor {
+                transistors.push(transistor);
+            }
             if let Some(card) = element.card
                 && !cards.contains(&card)
             {
@@ -70,6 +86,7 @@ impl Design {
         Ok(Netlist {
             text: lines.join("\n"),
             defaulted,
+            transistors,
         })
     }
 }

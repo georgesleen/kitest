@@ -495,6 +495,12 @@ impl PyOutcome {
         self.inner.check.clone().map(|inner| PyCheck { inner })
     }
 
+    /// For a failed check, what the corner's operating point says about it:
+    /// the probe net's bias, each transistor's bias, and undriven supplies.
+    fn diagnosis(&self) -> Vec<String> {
+        self.inner.diagnosis.clone()
+    }
+
     /// False only for a check that ran and failed.
     fn __bool__(&self) -> bool {
         self.inner.passed()

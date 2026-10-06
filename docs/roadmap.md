@@ -33,6 +33,10 @@ particular circuit is supposed to do, which only the designer knows.
 - A Python surface mirroring the Rust one, and shared netlist fixtures
   so both languages exercise one artifact per circuit.
 - A real oscillator measured: 2N3904 Colpitts at 10.15 MHz.
+- A failed check diagnosed from the operating point: the probe net's DC
+  bias, each BJT off, saturated or active, and a labelled net at 0 V on a
+  collector or drain named as an undriven supply. `kitest --show PROBE`
+  sketches the waveform an oscillation check ran on, in the terminal.
 
 ```mermaid
 graph TD

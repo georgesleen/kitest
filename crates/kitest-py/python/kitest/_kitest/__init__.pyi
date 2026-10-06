@@ -232,6 +232,11 @@ class Outcome:
         r"""
         The check, or `None` for a probe with no `Expect`.
         """
+    def diagnosis(self) -> builtins.list[builtins.str]:
+        r"""
+        For a failed check, what the corner's operating point says about it:
+        the probe net's bias, each transistor's bias, and undriven supplies.
+        """
     def __bool__(self) -> builtins.bool:
         r"""
         False only for a check that ran and failed.

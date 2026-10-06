@@ -19,9 +19,10 @@ use std::process::Command;
 pub use design::{
     Component, Design, LibraryId, LibraryPart, LibraryPin, Net, Node, PinKind,
 };
-pub use netlist::{Netlist, NetlistError};
+pub use netlist::{Netlist, NetlistError, Transistor};
 pub(crate) use node::node_name;
 pub use probe::{Probe, ProbeError, ProbeProblem};
+pub(crate) use rail::{is_ground, is_spice_ground};
 use sexpr::SexpError;
 pub(crate) use value::{Unit, parse as parse_value};
 

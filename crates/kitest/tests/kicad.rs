@@ -167,6 +167,41 @@ fn the_colpitts_probe_fails_a_wrong_frequency_and_says_what_it_measured() {
 }
 
 #[test]
+fn a_supply_reached_through_an_undeclared_label_is_named_in_the_failure() {
+    // VCC as a local label, not a power symbol, so nothing resolves it.
+    let mut design = colpitts_expecting("oscillates(near=10.115e6, within=2%)");
+    design.rails.retain(|rail| rail != "VCC");
+    let net = design
+        .nets
+        .iter_mut()
+        .find(|net| net.name == "VCC")
+        .unwrap();
+    net.name = "VSUP".into();
+    for component in &mut design.components {
+        for net in component.pins.values_mut() {
+            if net == "VCC" {
+                *net = "VSUP".into();
+            }
+        }
+    }
+    let report = design
+        .check(&Config::default(), &Ngspice::default())
+        .unwrap();
+
+    let outcome = &report.outcomes[0];
+    assert!(!outcome.passed());
+    let undriven = outcome
+        .diagnosis
+        .iter()
+        .find(|finding| finding.starts_with("VSUP sits at 0 V"));
+    assert!(
+        undriven.is_some_and(|finding| finding.contains("Q1's collector")),
+        "{:?}",
+        outcome.diagnosis
+    );
+}
+
+#[test]
 fn the_colpitts_probe_checks_its_dc_bias() {
     let design = colpitts_expecting("dc(near=3.7, within=abs(0.1))");
     let config = Config::for_project(Path::new(COLPITTS)).expect("config");
