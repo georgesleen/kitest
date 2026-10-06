@@ -33,11 +33,10 @@ impl OperatingPoint {
         Self { voltages }
     }
 
-    /// DC voltage at `node`, or `None` if that node is absent.
+    /// DC voltage at `node`, a SPICE node or schematic net name, or `None`
+    /// if that node is absent.
     pub fn node(&self, node: &str) -> Option<Voltage> {
-        Some(Voltage::new(
-            self.voltages.get(&node.to_lowercase()).copied()?,
-        ))
+        Some(Voltage::new(self.voltages.get(&key(node)).copied()?))
     }
 
     /// The node names present in the result.
@@ -61,12 +60,10 @@ impl Transient {
         Self { time, signals }
     }
 
-    /// Waveform at `node`, or `None` if that node is absent.
+    /// Waveform at `node`, a SPICE node or schematic net name, or `None` if
+    /// that node is absent.
     pub fn node(&self, node: &str) -> Option<Signal<'_>> {
-        Some(Signal::new(
-            &self.time,
-            self.signals.get(&node.to_lowercase())?,
-        ))
+        Some(Signal::new(&self.time, self.signals.get(&key(node))?))
     }
 
     /// The node names present in the result.
@@ -90,11 +87,12 @@ impl Spectra {
         Self { frequency, signals }
     }
 
-    /// Response at `node`, or `None` if that node is absent.
+    /// Response at `node`, a SPICE node or schematic net name, or `None` if
+    /// that node is absent.
     pub fn node(&self, node: &str) -> Option<Response<'_>> {
         Some(Response::new(
             &self.frequency,
-            self.signals.get(&node.to_lowercase())?,
+            self.signals.get(&key(node))?,
         ))
     }
 
@@ -102,4 +100,10 @@ impl Spectra {
     pub fn nodes(&self) -> Vec<&str> {
         self.signals.keys().map(String::as_str).collect()
     }
+}
+
+/// The result key for `node`: ngspice lowercases node names, and a schematic
+/// net name becomes its SPICE node the same way the netlist renames it.
+fn key(node: &str) -> String {
+    crate::kicad::node_name(node).to_lowercase()
 }
