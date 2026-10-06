@@ -30,6 +30,9 @@ particular circuit is supposed to do, which only the designer knows.
 - Frequency measurement end to end: non-uniform resampling, Hann window,
   real FFT, sub-bin peak interpolation, window-loss correction.
 - `kicad-cli` SPICE export, locked against a committed golden netlist.
+- The `kicadxml` export read back as each example is drawn: every part,
+  net, pin type, and model field, stated by hand rather than recorded, so a
+  `kicad-cli` change cannot be re-recorded into a passing test.
 - A Python surface mirroring the Rust one, and shared netlist fixtures
   so both languages exercise one artifact per circuit.
 - A real oscillator measured: 2N3904 Colpitts at 10.15 MHz.
@@ -71,8 +74,6 @@ pass or fail, without writing simulator parameters.
   KiCad project sits now and a live editor session sits later.
 - The same model also fills from a plain test file keyed on net labels,
   so a user can adopt kitest without touching the schematic at all.
-- Lock the XML export against a golden file, as the SPICE export already
-  is: it is a second contract with `kicad-cli`.
 - A runner and a report. Pass or fail per probe, and on failure the
   measured value beside the expected one.
 
