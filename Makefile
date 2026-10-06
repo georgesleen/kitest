@@ -1,6 +1,6 @@
 NIX_FILES := $(shell find . -name '*.nix' -not -path './.git/*')
 
-.PHONY: fmt fmt-check lint test pytest build venv stubs
+.PHONY: fmt fmt-check lint test pytest build venv stubs stubs-check
 
 fmt:
 	nixfmt $(NIX_FILES)
@@ -36,3 +36,11 @@ build:
 # Regenerate crates/kitest-py/python/kitest/_kitest/__init__.pyi from the binding.
 stubs:
 	cargo run -q -p kitest-py --bin stub_gen
+
+# Fail if the stubs on disk differ from what the binding generates, or the
+# generator wrote a file git does not track. Staged stubs count as current.
+stubs-check:
+	$(MAKE) stubs
+	@git diff --exit-code -- crates/kitest-py/python/kitest/_kitest/ \
+		&& test -z "$$(git ls-files --others --exclude-standard -- crates/kitest-py/python/kitest/_kitest/)" \
+		|| { echo "stubs are stale: run 'make stubs' and commit the result" >&2; exit 1; }

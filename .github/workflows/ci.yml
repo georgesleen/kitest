@@ -11,4 +11,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - run: nix develop -c make fmt-check lint test
+      - run: nix develop -c make fmt-check lint stubs-check test
