@@ -1,0 +1,37 @@
+name: Feature or task
+description: Work that can close, with a goal and an acceptance test.
+body:
+  - type: markdown
+    attributes:
+      value: Add one `area:` label for the roadmap section this work belongs to.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: The result, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What the owner must know before starting.
+  - type: textarea
+    id: change
+    attributes:
+      label: Change
+      description: The steps or the files to change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: The observable result that closes the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-goals
+      description: Related work that this issue does not include.
