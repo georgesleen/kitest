@@ -2,4 +2,4 @@
 # Local gate, mirrored in CI.
 set -euo pipefail
 
-make fmt-check lint test
+make fmt-check lint stubs-check test
