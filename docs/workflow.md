@@ -8,6 +8,18 @@ George merges it.
 a passing `gate` check, and one approving review. Admins are exempt from the
 review rule.
 
+Agents open PRs as `georgesleen` until a bot identity exists (#6), so GitHub
+cannot provide the required independent approval from the PR author. Do not
+enable required code-owner reviews until that identity exists.
+
+## Commit messages
+
+Every clone and worktree uses `.gitmessage`, configured by `.envrc` in the
+shared local Git config. AI-authored commits use the template's `## Purpose`,
+`## Description`, and `## Testing` sections and include the required
+`Co-Authored-By` trailer. The template uses `;` as Git's local
+`core.commentChar`, rather than `#`, so its `##` headings survive commits.
+
 ## Issues and the roadmap
 
 `docs/roadmap.md` holds long-range direction. Issues hold work that can close.
