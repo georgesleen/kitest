@@ -1,6 +1,6 @@
 NIX_FILES := $(shell find . -name '*.nix' -not -path './.git/*')
 
-.PHONY: fmt fmt-check lint test pytest build stubs stubs-check
+.PHONY: fmt fmt-check lint test pytest build stubs stubs-check docs docs-serve
 
 fmt:
 	nixfmt $(NIX_FILES)
@@ -40,3 +40,15 @@ stubs-check:
 	@git diff --exit-code -- crates/kitest-py/python/kitest/_kitest/ \
 		&& test -z "$$(git ls-files --others --exclude-standard -- crates/kitest-py/python/kitest/_kitest/)" \
 		|| { echo "stubs are stale: run 'make stubs' and commit the result" >&2; exit 1; }
+
+# Build the docs site into site/, with the Rust API under site/api/rust/.
+# rustdoc gets its own target dir, so the site holds no stale crate docs.
+docs:
+	mkdocs build --strict
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --lib -p kitest --target-dir $(TARGET_DIR)/site
+	rm -rf site/api/rust
+	mkdir -p site/api
+	cp -r $(TARGET_DIR)/site/doc site/api/rust
+
+docs-serve:
+	mkdocs serve
