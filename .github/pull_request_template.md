@@ -15,4 +15,5 @@ See [docs/workflow.md](https://github.com/georgesleen/kitest/blob/main/docs/work
 - [ ] Out-of-scope findings are new linked issues.
 - [ ] Decisions are recorded in the issue or in `docs/decisions.md`.
 - [ ] AI-written commits carry the `Co-Authored-By: Claude` trailer.
-- [ ] After the merge: the worktree and the local and remote branches are removed.
+- [ ] The checks are green, and the PR is handed to George, who alone merges.
+- [ ] After George merges: the worktree and the local and remote branches are removed, and the issue is closed.

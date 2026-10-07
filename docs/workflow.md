@@ -1,7 +1,8 @@
 # Ticket workflow
 
 This is the definition of done for a ticket. One owner, a person or an agent,
-carries an issue from claim to merge and cleanup.
+carries an issue from claim to a reviewed, green PR, and cleans up after
+George merges it.
 
 `main` is protected. A change reaches it only through a PR with linear history,
 a passing `gate` check, and one approving review. Admins are exempt from the
@@ -57,30 +58,40 @@ roadmap takes `area:infra`.
    investigate, not a required change. The owner confirms the evidence
    before acting on the finding.
 
-5. **Merge** once CI is green and the verdict is posted. Remove the worktree
-   first, then merge as an admin, since no one can approve the PR yet:
+5. **Merge.** Only George merges. Once CI is green and the MERGE verdict is
+   posted, the owner hands the PR to George. He merges it as an admin, since
+   no one can approve the PR yet:
 
    ```sh
-   git worktree remove worktrees/issue-<N>
    gh pr merge <PR> --rebase --delete-branch --admin
    ```
 
-   Delete the local branch, and the remote branch if it survives. The issue
-   closes through `Closes #<N>`.
+   After the merge, the owner removes the worktree and the local branch,
+   deletes the remote branch if it survives, and checks that the issue
+   closed through `Closes #<N>`:
+
+   ```sh
+   git worktree remove worktrees/issue-<N>
+   git branch -D issue-<N>-<slug>
+   gh api -X DELETE repos/georgesleen/kitest/git/refs/heads/issue-<N>-<slug>
+   gh issue view <N> --json state
+   ```
 6. **Out-of-scope findings** become new issues that link back to this one.
 7. **Decisions** made during the work go into the issue. A lasting decision
    goes into `docs/decisions.md`.
 8. **Commit trailer.** A commit that an AI wrote or co-wrote ends with
    `Co-Authored-By: Claude <noreply@anthropic.com>`. A commit that George wrote
    alone has no trailer.
-9. **Report evidence, not prose.** An agent reports the PR URL, the merge commit
-   on `main`, and the issue state.
+9. **Report evidence, not prose.** At the hand-off, an agent reports the PR
+   URL, the reviewer's verdict, and the check runs. After the merge, it
+   reports the merge commit on `main` and the issue state.
 
 ## Roles
 
 - **Orchestrator:** splits work into issues, assigns owners, and arranges
-  reviews. It does not implement.
+  reviews. It does not implement, and it never merges.
 - **Implementer:** owns one issue end to end, through the definition of done.
+  It never merges; it hands the PR to George.
 - **Pair:** supports George while he writes the code himself. It explains,
   designs, and reviews, but does not write the source.
 - **Reviewer:** reviews a PR it did not write, and returns a verdict with
