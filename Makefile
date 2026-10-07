@@ -50,5 +50,5 @@ docs:
 	mkdir -p site/api
 	cp -r $(TARGET_DIR)/site/doc site/api/rust
 
-docs-serve:
-	mkdocs serve
+docs-serve: docs
+	python3 -m http.server --bind 127.0.0.1 --directory site 8000
