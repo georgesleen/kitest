@@ -3,8 +3,9 @@
 This is the definition of done for a ticket. One owner, a person or an agent,
 carries an issue from claim to merge and cleanup.
 
-`main` is protected. A change reaches it only through a PR whose `gate` check
-passes, with linear history. Admins follow the same rules.
+`main` is protected. A change reaches it only through a PR with linear history,
+a passing `gate` check, and one approving review. Admins are exempt from the
+review rule.
 
 ## Issues and the roadmap
 
@@ -41,11 +42,26 @@ roadmap takes `area:infra`.
 
 3. **Open a PR** from the template. Its body contains `Closes #<N>`; the
    `issue-link` check fails without it.
-4. **Review.** A separate reviewer reviews the PR. The owner addresses each
-   finding with new commits, and the reviewer reviews again until it approves.
-5. **Merge** once CI is green, with `gh pr merge <PR> --rebase --delete-branch`.
-   Remove the worktree before the merge, then delete the local branch and, if
-   it survives, the remote branch. The issue closes through `Closes #<N>`.
+4. **Review.** Every PR needs one review by a separate reviewer. The owner
+   addresses each finding with new commits, and the reviewer reviews again
+   until its verdict is MERGE. GitHub does not let the author approve their
+   own PR, and agents open PRs as georgesleen. Until a bot identity exists, the
+   review is a reviewer agent's final verdict, posted on the PR:
+
+   ```sh
+   gh pr review <PR> --comment --body "<verdict and findings>"
+   ```
+
+5. **Merge** once CI is green and the verdict is posted. Remove the worktree
+   first, then merge as an admin, since no one can approve the PR yet:
+
+   ```sh
+   git worktree remove worktrees/issue-<N>
+   gh pr merge <PR> --rebase --delete-branch --admin
+   ```
+
+   Delete the local branch, and the remote branch if it survives. The issue
+   closes through `Closes #<N>`.
 6. **Out-of-scope findings** become new issues that link back to this one.
 7. **Decisions** made during the work go into the issue. A lasting decision
    goes into `docs/decisions.md`.

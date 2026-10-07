@@ -11,7 +11,7 @@ See [docs/workflow.md](https://github.com/georgesleen/kitest/blob/main/docs/work
 - [ ] The body above says `Closes #<N>`.
 - [ ] `nix develop -c make fmt-check lint stubs-check test` passes.
 - [ ] The branch is pushed by name, and `git ls-remote` shows the local `HEAD`.
-- [ ] A separate reviewer reviewed the PR, and every finding is addressed.
+- [ ] A separate reviewer reviewed the PR, every finding is addressed, and the MERGE verdict is posted on the PR.
 - [ ] Out-of-scope findings are new linked issues.
 - [ ] Decisions are recorded in the issue or in `docs/decisions.md`.
 - [ ] AI-written commits carry the `Co-Authored-By: Claude` trailer.
