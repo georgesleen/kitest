@@ -14,11 +14,11 @@ enable required code-owner reviews until that identity exists.
 
 ## Commit messages
 
-Every clone and worktree uses `.gitmessage`, configured by `.envrc` in the
-shared local Git config. AI-authored commits use the template's `## Purpose`,
-`## Description`, and `## Testing` sections and include the required
-`Co-Authored-By` trailer. The template uses `;` as Git's local
-`core.commentChar`, rather than `#`, so its `##` headings survive commits.
+Commit messages are one terse line in the form `<system>: <imperative
+message>`, with a lowercase affected area such as `github`, `scope`, `kicad`,
+`sim`, `docs`, `nix`, or `python`. AI-authored commits also include the
+required `Co-Authored-By` trailer.
+
 
 ## Issues and the roadmap
 
