@@ -52,6 +52,11 @@ roadmap takes `area:infra`.
    gh pr review <PR> --comment --body "<verdict and findings>"
    ```
 
+   Every blocking finding cites its evidence: a doc link, a test, or a
+   command and its output. A finding without evidence is a question to
+   investigate, not a required change. The owner confirms the evidence
+   before acting on the finding.
+
 5. **Merge** once CI is green and the verdict is posted. Remove the worktree
    first, then merge as an admin, since no one can approve the PR yet:
 
