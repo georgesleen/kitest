@@ -104,15 +104,60 @@ The test should contain the design and the intent, and nothing else.
 - Diagnostics as a first-class surface. A failed assertion needs the
   spectrum, or the waveform, or the search the runner performed. An
   opaque failure is worse than no test.
-- A scope viewer for probe waveforms: zoom, cursors, and measurement
-  readouts computed by kitest's own analysis, so the numbers shown match
-  the numbers asserted. egui_plot underneath, as a standalone crate
-  published separately with measurements supplied by the caller.
+- A scope that shows every run, without being asked twice; see Scope.
 - An interactive mode: `kitest` in a KiCad project asks which net and
   what it should do, runs, and saves the result as a test. The analysis
   follows from the probes, never from a menu.
 - An install check for `ngspice` and `kicad-cli`, so a missing tool is
   a clear first message rather than a spawn error.
+
+## Scope
+
+An oscilloscope, spectrum analyser, and VNA in one window, with the one
+thing none of them has: the test's expectation drawn on the plot. It is
+the `kitest-scope` crate, standalone and egui underneath; kitest supplies
+the measurements, so the numbers shown are the numbers asserted.
+
+The data path is files. kitest writes each capture to the project's
+`.kitest/captures/`, ignored by git, and the scope reads them. A capture
+carries a stable identity (project, probe or net, analysis, corner) and
+the run's metadata, so a re-run lands where the last one did.
+
+Done:
+- The capture file, a versioned JSON transient or AC sweep, written by
+  `Transient::capture` and `Spectra::capture`.
+- A window that opens a capture and lists its traces.
+
+One window, live:
+- One long-lived window. A second `kitest --show` finds the running
+  scope and only writes the file, never opening another window that a
+  tiling window manager would reflow a workspace for. A fixed `app_id`
+  lets the window manager place it.
+- Panes like tmux or sway: splits, tabs, drag and resize, through
+  `egui_tiles`. A pane is a view; traces are dragged into it.
+- Overlay: several traces in one pane. Mixed units stack in panes with a
+  linked x axis rather than sharing a second y axis.
+- Live reload: the scope watches the captures directory and redraws a
+  changed capture in place, keeping layout and cursors. Whether zoom
+  holds or refits on reload is a setting, both supported.
+- The previous run kept as a faded reference trace behind the new one, so
+  "did that change help" is answered at a glance.
+
+Instruments:
+- Oscilloscope: cursors with delta time, delta voltage, and 1/dt;
+  readouts for frequency, peak to peak, RMS, rise time, and overshoot;
+  a trigger, so a steady oscillation stands still across re-runs;
+  min/max decimation per pixel, so a long run stays responsive.
+- Spectrum analyser: a windowed FFT of a transient trace in dB, with peak
+  and harmonic markers and the noise floor.
+- VNA: Bode magnitude and unwrapped phase on a log frequency axis, as a
+  transfer function (`vout/vin`) rather than an assumed 1 V source;
+  markers, the -3 dB point, gain and phase margin, group delay. Smith
+  and polar charts once a port or impedance probe exists.
+- Everywhere: SI units, log or linear axes, corners overlaid as a family,
+  and PNG and CSV export.
+- The expectation drawn on the plot: the pass band from `Expect` shaded
+  and coloured pass or fail, so a failed check shows where it fell out.
 
 ## Reference design
 
