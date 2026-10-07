@@ -1,4 +1,4 @@
-name: Bug
+name: Bug report
 description: kitest does something wrong.
 labels: [bug]
 body:
