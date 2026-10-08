@@ -8,6 +8,17 @@ George merges it.
 a passing `gate` check, and one approving review. Admins are exempt from the
 review rule.
 
+Agents open PRs as `georgesleen` until a bot identity exists (#6), so GitHub
+cannot provide the required independent approval from the PR author. Do not
+enable required code-owner reviews until that identity exists.
+
+## Commit messages
+
+Commit messages are one terse line in the form `<system>: <imperative
+message>`, with a lowercase affected area such as `github`, `scope`, `kicad`,
+`sim`, `docs`, `nix`, or `python`. AI-authored commits also include the
+required `Co-Authored-By` trailer.
+
 ## Issues and the roadmap
 
 `docs/roadmap.md` holds long-range direction. Issues hold work that can close.
