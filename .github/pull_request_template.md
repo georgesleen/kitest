@@ -1,8 +1,10 @@
 Closes #
 
-## What changed
+## Purpose
 
-## How it was verified
+## Description
+
+## Testing
 
 ## Definition of done
 
