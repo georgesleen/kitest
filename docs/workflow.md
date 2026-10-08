@@ -11,8 +11,6 @@ review rule.
 ## Issues and the roadmap
 
 `docs/roadmap.md` holds long-range direction. Issues hold work that can close.
-An issue names its roadmap section with one `area:` label; work outside the
-roadmap takes `area:infra`.
 
 ## Definition of done
 
@@ -41,8 +39,7 @@ roadmap takes `area:infra`.
    git ls-remote origin refs/heads/issue-<N>-<slug>
    ```
 
-3. **Open a PR** from the template. Its body contains `Closes #<N>`; the
-   `issue-link` check fails without it.
+3. **Open a PR** from the template. Its body contains `Closes #<N>`.
 4. **Review.** Every PR needs one review by a separate reviewer. The owner
    addresses each finding with new commits, and the reviewer reviews again
    until its verdict is MERGE. GitHub does not let the author approve their
