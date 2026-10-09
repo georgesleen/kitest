@@ -1,0 +1,8 @@
+[package]
+name = "kitest-measure"
+version = "0.0.0"
+description = "Measurements of sampled curves, shared by kitest's checks and its scope"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

@@ -1760,6 +1760,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 name = "kitest"
 version = "0.0.0"
 dependencies = [
+ "kitest-measure",
  "kitest-scope",
  "num-complex",
  "rand 0.10.3",
@@ -1771,6 +1772,10 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
 ]
+
+[[package]]
+name = "kitest-measure"
+version = "0.0.0"
 
 [[package]]
 name = "kitest-py"
@@ -1788,6 +1793,8 @@ version = "0.0.0"
 dependencies = [
  "eframe",
  "egui_plot",
+ "kitest-measure",
+ "png",
  "serde",
  "serde_json",
  "tempfile",
