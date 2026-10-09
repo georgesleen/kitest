@@ -1,18 +1,22 @@
 //! Frequency-domain measurement of a time-domain signal.
 
+#[cfg(test)]
 use std::f64::consts::PI;
 
+#[cfg(test)]
 use realfft::RealFftPlanner;
 
 use crate::{Frequency, Signal, Tone, Voltage};
 
 /// A window function, with the corrections its shape forces on a
 /// measurement.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 enum Window {
     Hann,
 }
 
+#[cfg(test)]
 impl Window {
     /// Taper at sample `k` of `n`.
     fn taper(self, k: usize, n: usize) -> f64 {
@@ -45,12 +49,14 @@ impl Window {
 }
 
 /// One point on a waveform.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct Point {
     time: f64,
     value: f64,
 }
 
+#[cfg(test)]
 impl Point {
     /// The point at index `i`.
     fn at(time: &[f64], values: &[f64], i: usize) -> Self {
@@ -62,11 +68,13 @@ impl Point {
 }
 
 /// Samples at a constant time step, as the transform requires.
+#[cfg(test)]
 struct Waveform {
     dt: f64,
     values: Vec<f64>,
 }
 
+#[cfg(test)]
 impl Waveform {
     /// Resample a signal onto a uniform time grid.
     ///
@@ -148,6 +156,7 @@ impl Waveform {
 }
 
 /// Magnitudes at a constant frequency step.
+#[cfg(test)]
 struct Spectrum {
     bin_width: f64,
     samples: usize,
@@ -155,6 +164,7 @@ struct Spectrum {
     magnitudes: Vec<f64>,
 }
 
+#[cfg(test)]
 impl Spectrum {
     /// Bin index of the largest magnitude.
     fn peak_bin(&self) -> usize {
@@ -191,11 +201,6 @@ impl Spectrum {
         0.5 * (a - g) / curvature
     }
 
-    /// Frequency of the peak at `bin`, `offset` bins from its centre.
-    fn frequency(&self, bin: usize, offset: f64) -> f64 {
-        (bin as f64 + offset) * self.bin_width
-    }
-
     /// Amplitude of the peak at `bin`, zero to peak.
     fn amplitude(&self, bin: usize, offset: f64) -> f64 {
         let gain = self.window.coherent_gain() * self.window.lobe(offset);
@@ -204,6 +209,7 @@ impl Spectrum {
 }
 
 /// Interpolate a value on the line through `a` and `b` at `time`.
+#[cfg(test)]
 fn linear_interpolate(a: Point, b: Point, time: f64) -> f64 {
     let slope = (b.value - a.value) / (b.time - a.time);
     a.value + slope * (time - a.time)
@@ -211,22 +217,21 @@ fn linear_interpolate(a: Point, b: Point, time: f64) -> f64 {
 
 /// Find the dominant sinusoid in an arbitrary waveform.
 pub(crate) fn dominant_tone(signal: &Signal) -> Tone {
-    // Powers of two are the fastest length for the transform.
-    let n = signal.time().len().next_power_of_two();
-    let spectrum = Waveform::resample(signal, n)
-        .remove_mean()
-        .spectrum(Window::Hann);
-
-    let bin = spectrum.peak_bin();
-    let offset = spectrum.parabolic_offset(bin);
-    let hertz = spectrum.frequency(bin, offset);
-
+    let samples = signal.time().len().next_power_of_two();
+    let spectrum = kitest_measure::Curve::new(signal.time(), signal.values())
+        .spectrum(
+            signal.time()[0]..=signal.time()[signal.time().len() - 1],
+            samples,
+        )
+        .expect("a signal has at least two increasing time points");
+    let tone = spectrum.dominant().unwrap_or(kitest_measure::Tone {
+        hertz: 0.0,
+        amplitude: 0.0,
+    });
     Tone::new(
-        Frequency::new(hertz),
-        Voltage::new(spectrum.amplitude(bin, offset)),
-        // The simulator's own rate, not the resampled one: interpolation
-        // cannot recover a cycle the simulator never sampled.
-        sample_rate(signal) / hertz,
+        Frequency::new(tone.hertz),
+        Voltage::new(tone.amplitude),
+        sample_rate(signal) / tone.hertz,
     )
 }
 

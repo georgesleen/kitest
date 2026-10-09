@@ -1,5 +1,11 @@
 //! Measurements of sampled curves, shared by kitest's checks and its scope.
 
+mod spectrum;
+mod vna;
+
+pub use spectrum::{Spectrum, Tone};
+pub use vna::{gain_margin, group_delay, phase_margin};
+
 use std::iter;
 use std::ops::RangeInclusive;
 

@@ -1776,6 +1776,9 @@ dependencies = [
 [[package]]
 name = "kitest-measure"
 version = "0.0.0"
+dependencies = [
+ "realfft",
+]
 
 [[package]]
 name = "kitest-py"
