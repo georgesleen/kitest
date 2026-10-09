@@ -38,7 +38,7 @@ particular circuit is supposed to do, which only the designer knows.
 - A real oscillator measured: 2N3904 Colpitts at 10.15 MHz.
 - A failed check diagnosed from the operating point: the probe net's DC
   bias, each BJT off, saturated or active, and a labelled net at 0 V on a
-  collector or drain named as an undriven supply. `kitest --show PROBE`
+  collector or drain named as an undriven supply. `kitest --sketch PROBE`
   sketches the waveform an oscillation check ran on, in the terminal.
 - An oscillation check on a design with a crystal says crystal
   oscillators are not supported yet, instead of a misleading "still
@@ -139,31 +139,34 @@ Done:
   cursors.
 - Bode magnitude and unwrapped phase on a log frequency axis.
 - PNG and CSV export.
+- One live window with a fixed `app_id`: later launches hand it their
+  capture through a Unix socket. It reloads the current file in place,
+  keeps layout, cursors and zoom, and fades the previous run behind the
+  new one. Captures of one identity at different corners overlay as a
+  family.
+- Version-2 captures carry a stable name, corner, and checked regions.
+  Time bands and spectrum frequency bands are shaded and coloured by
+  their verdict; pane headers carry the full PASS or FAIL message.
+- `kitest --show PROBE` writes `.kitest/captures/` and opens the live
+  scope; `--sketch` keeps the terminal view. Rust and Python can
+  explicitly attach a `Check` to a capture and save it.
+- A Hann-windowed spectrum of the visible time window, in dBV, with the
+  dominant tone and its harmonics marked.
+- Bode transfer functions against a selected reference trace, gain and
+  phase margin, and group delay.
+- An optional trace, level, and edge trigger that aligns re-runs to time
+  zero.
 
 One window, live:
-- One long-lived window. A second `kitest --show` finds the running
-  scope and only writes the file, never opening another window that a
-  tiling window manager would reflow a workspace for. A fixed `app_id`
-  lets the window manager place it.
 - Tabs and side-by-side splits beside the stacked panes, through
   `egui_tiles`.
-- Live reload: the scope watches the captures directory and redraws a
-  changed capture in place, keeping layout and cursors. Whether zoom
-  holds or refits on reload is a setting, both supported.
-- The previous run kept as a faded reference trace behind the new one, so
-  "did that change help" is answered at a glance.
+- A capture-directory picker and the choice to refit instead of holding
+  zoom on reload.
 
 Instruments:
-- Oscilloscope: overshoot against the test's target; a trigger, so a
-  steady oscillation stands still across re-runs.
-- Spectrum analyser: a windowed FFT of a transient trace in dB, with peak
-  and harmonic markers and the noise floor.
-- VNA: a transfer function (`vout/vin`) rather than an assumed 1 V source;
-  gain and phase margin, group delay. Smith and polar charts once a port
-  or impedance probe exists.
-- Corners overlaid as a family.
-- The expectation drawn on the plot: the pass band from `Expect` shaded
-  and coloured pass or fail, so a failed check shows where it fell out.
+- Oscilloscope: overshoot against the test's target.
+- Spectrum analyser: a noise-floor line and peak and harmonic labels.
+- VNA: Smith and polar charts once a port or impedance probe exists.
 
 ## Reference design
 

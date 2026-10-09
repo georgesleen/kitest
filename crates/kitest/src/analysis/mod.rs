@@ -20,7 +20,7 @@ pub use voltage::Voltage;
 
 use std::collections::BTreeMap;
 
-use kitest_scope::{AcTrace, Capture, Trace};
+use kitest_scope::{AcTrace, Capture, Data, Trace};
 
 use num_complex::Complex64;
 
@@ -83,19 +83,22 @@ impl Transient {
         self.signals.keys().map(String::as_str).collect()
     }
 
-    /// Every node's waveform as a scope capture.
-    pub fn capture(&self) -> Capture {
-        Capture::Transient {
-            time: self.time.clone(),
-            traces: self
-                .signals
-                .iter()
-                .map(|(name, values)| Trace {
-                    name: name.clone(),
-                    values: values.clone(),
-                })
-                .collect(),
-        }
+    /// Every node's waveform as a scope capture named `name`.
+    pub fn capture(&self, name: impl Into<String>) -> Capture {
+        Capture::new(
+            name,
+            Data::Transient {
+                time: self.time.clone(),
+                traces: self
+                    .signals
+                    .iter()
+                    .map(|(name, values)| Trace {
+                        name: name.clone(),
+                        values: values.clone(),
+                    })
+                    .collect(),
+            },
+        )
     }
 }
 
@@ -128,20 +131,23 @@ impl Spectra {
         self.signals.keys().map(String::as_str).collect()
     }
 
-    /// Every node's response as a scope capture, for a Bode plot.
-    pub fn capture(&self) -> Capture {
-        Capture::Ac {
-            frequency: self.frequency.clone(),
-            traces: self
-                .signals
-                .iter()
-                .map(|(name, values)| AcTrace {
-                    name: name.clone(),
-                    re: values.iter().map(|value| value.re).collect(),
-                    im: values.iter().map(|value| value.im).collect(),
-                })
-                .collect(),
-        }
+    /// Every node's response as a scope capture named `name`, for a Bode plot.
+    pub fn capture(&self, name: impl Into<String>) -> Capture {
+        Capture::new(
+            name,
+            Data::Ac {
+                frequency: self.frequency.clone(),
+                traces: self
+                    .signals
+                    .iter()
+                    .map(|(name, values)| AcTrace {
+                        name: name.clone(),
+                        re: values.iter().map(|value| value.re).collect(),
+                        im: values.iter().map(|value| value.im).collect(),
+                    })
+                    .collect(),
+            },
+        )
     }
 }
 

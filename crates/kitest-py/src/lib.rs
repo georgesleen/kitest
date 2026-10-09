@@ -9,10 +9,10 @@ use pyo3_stub_gen::derive::{
 };
 
 use ::kitest::{
-    Ac, AcSupply, Backend, Check, Config, Corner, DcSupply, Design, Frequency,
-    ModelLibrary, Ngspice, OperatingPoint, Outcome, Power, Probe, Pulse, Rail,
-    RailKind, Response, Signal, Sin, Spectra, Sweep, Tolerance, Tone, Tran,
-    TranSource, Transient, Voltage, VoltageOrigin,
+    Ac, AcSupply, Backend, Capture, Check, Config, Corner, DcSupply, Design,
+    Frequency, ModelLibrary, Ngspice, OperatingPoint, Outcome, Power, Probe,
+    Pulse, Rail, RailKind, Response, Signal, Sin, Spectra, Sweep, Tolerance,
+    Tone, Tran, TranSource, Transient, Voltage, VoltageOrigin,
 };
 
 /// Returns the kitest version string.
@@ -419,6 +419,40 @@ impl PyCheck {
     fn __repr__(&self) -> String {
         let outcome = if self.inner.passed() { "pass" } else { "fail" };
         format!("Check({outcome}: {})", self.inner)
+    }
+}
+
+/// A scope capture, with expectations explicitly attached before it is saved.
+#[gen_stub_pyclass]
+#[pyclass(module = "kitest._kitest", name = "Capture")]
+struct PyCapture {
+    inner: Capture,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyCapture {
+    /// Attach `check` to `trace`.
+    fn expect(&mut self, trace: &str, check: &PyCheck) -> PyResult<()> {
+        if !self.inner.trace_names().contains(&trace) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "capture has no trace {trace}"
+            )));
+        }
+        let Some(expectation) = check.inner.expectation(trace) else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "check has no region to draw",
+            ));
+        };
+        self.inner.expectations.push(expectation);
+        Ok(())
+    }
+
+    /// Save the capture as versioned JSON.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.inner.save(Path::new(path)).map_err(|error| {
+            pyo3::exceptions::PyOSError::new_err(error.to_string())
+        })
     }
 }
 
@@ -1087,6 +1121,13 @@ impl PyTransient {
     fn nodes(&self) -> Vec<String> {
         self.inner.nodes().into_iter().map(String::from).collect()
     }
+
+    /// Every node's waveform as a scope capture named `name`.
+    fn capture(&self, name: &str) -> PyCapture {
+        PyCapture {
+            inner: self.inner.capture(name),
+        }
+    }
 }
 
 #[gen_stub_pyclass]
@@ -1110,6 +1151,13 @@ impl PySpectra {
 
     fn nodes(&self) -> Vec<String> {
         self.inner.nodes().into_iter().map(String::from).collect()
+    }
+
+    /// Every node's response as a scope capture named `name`.
+    fn capture(&self, name: &str) -> PyCapture {
+        PyCapture {
+            inner: self.inner.capture(name),
+        }
     }
 }
 
@@ -1140,6 +1188,7 @@ fn _kitest(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOperatingPoint>()?;
     m.add_class::<PyTransient>()?;
     m.add_class::<PySpectra>()?;
+    m.add_class::<PyCapture>()?;
     m.add_class::<PyVoltage>()?;
     m.add_class::<PyFrequency>()?;
     m.add_class::<PyTone>()?;

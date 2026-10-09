@@ -22,8 +22,11 @@ const Y_AXIS_WIDTH: f32 = 64.0;
 /// and each pane's y quantity.
 pub(super) struct Shared<'v> {
     pub channels: &'v [Channel],
+    pub reference: &'v [Channel],
     pub shown: &'v [bool],
     pub panes: &'v [Quantity],
+    pub expectations: &'v [kitest_scope::Expectation],
+    pub horizontal_markers: &'v [(usize, f64, String)],
 }
 
 /// A change a pane asks its view to make.
@@ -73,6 +76,14 @@ impl Pane {
         self.y = Window::fit_values(values, Y_MARGIN, Y_GRID_LINES);
     }
 
+    /// Keeps `old`'s measurement choices and, unless `refit`, its y window.
+    pub fn preserve(&mut self, old: &Self, refit: bool) {
+        self.measurements.clone_from(&old.measurements);
+        if !refit {
+            self.y = old.y;
+        }
+    }
+
     /// The pane's channels whose traces are shown.
     pub fn shown_channels<'c>(
         &self,
@@ -84,15 +95,30 @@ impl Pane {
         )
     }
 
-    /// The rows the measurement strip takes: none without measurements or
-    /// both cursors, else a header and one row per shown channel.
+    /// The rows outside the plot: expectations and, when selected, measurements.
     pub fn strip_rows(&self, link: &Link, shared: &Shared<'_>) -> usize {
+        let expectations = shared
+            .expectations
+            .iter()
+            .filter(|expectation| {
+                self.channels.iter().any(|&index| {
+                    let channel = &shared.channels[index];
+                    channel.name == expectation.trace
+                        && shared
+                            .shown
+                            .get(channel.trace)
+                            .copied()
+                            .unwrap_or(false)
+                })
+            })
+            .count();
         let cursors = link.a.is_some() && link.b.is_some();
-        if self.measurements.is_empty() && !cursors {
+        let measurements = if self.measurements.is_empty() && !cursors {
             0
         } else {
             1 + self.shown_channels(shared.channels, shared.shown).count()
-        }
+        };
+        expectations + measurements
     }
 
     /// Draws the pane `height` points tall, then its measurement strip, and
@@ -112,7 +138,35 @@ impl Pane {
             (link.x.grid_spacing(), self.y.grid_spacing());
         let columns = ui.available_width().round() as usize;
         let marker = ui.visuals().weak_text_color();
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(self.quantity.name);
+            ui.weak(format!(
+                "{} / div",
+                self.quantity.unit.format(y_spacing, y_spacing, y_spacing)
+            ));
+            for channel in self.shown_channels(shared.channels, shared.shown) {
+                ui.colored_label(color(channel.trace), channel.name.as_str());
+            }
+        });
+        for expectation in shared.expectations.iter().filter(|expectation| {
+            self.channels.iter().any(|&index| {
+                let channel = &shared.channels[index];
+                channel.name == expectation.trace
+                    && shared.shown.get(channel.trace).copied().unwrap_or(false)
+            })
+        }) {
+            let (text, tint) = if expectation.passed {
+                ("PASS", egui::Color32::GREEN)
+            } else {
+                ("FAIL", egui::Color32::RED)
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(tint, egui::RichText::new(text).strong());
+                ui.colored_label(tint, expectation.message.as_str());
+            });
+        }
         let mut plot = Plot::new(("pane", index))
+            .grid_fade(0.8)
             .height(height)
             .allow_drag(false)
             .allow_zoom(false)
@@ -148,13 +202,88 @@ impl Pane {
             }
             plot_ui.set_plot_bounds_x(link.x.range());
             plot_ui.set_plot_bounds_y(self.y.range());
+            for expectation in
+                shared.expectations.iter().filter(|expectation| {
+                    self.channels.iter().any(|&index| {
+                        let channel = &shared.channels[index];
+                        channel.name == expectation.trace
+                            && shared
+                                .shown
+                                .get(channel.trace)
+                                .copied()
+                                .unwrap_or(false)
+                    })
+                })
+            {
+                let (start, end, low, high) = match expectation.region {
+                    kitest_scope::Region::Band {
+                        start,
+                        end,
+                        low,
+                        high,
+                    } => (start, end, low, high),
+                    kitest_scope::Region::Frequency { low, high }
+                        if x.log && low > 0.0 && high > low =>
+                    {
+                        (
+                            low.log10(),
+                            high.log10(),
+                            *self.y.range().start(),
+                            *self.y.range().end(),
+                        )
+                    }
+                    _ => continue,
+                };
+                let tint = if expectation.passed {
+                    egui::Color32::GREEN
+                } else {
+                    egui::Color32::RED
+                };
+                plot_ui.polygon(
+                    Polygon::new(
+                        "",
+                        PlotPoints::new(vec![
+                            [start, low],
+                            [end, low],
+                            [end, high],
+                            [start, high],
+                        ]),
+                    )
+                    .stroke(Stroke::new(1.0, tint))
+                    .style(LineStyle::dashed_dense())
+                    .fill_color(tint.gamma_multiply(0.12)),
+                );
+            }
+            for reference in shared.reference.iter().filter(|reference| {
+                self.channels.iter().any(|&index| {
+                    let current = &shared.channels[index];
+                    current.name == reference.name
+                        && current.quantity == reference.quantity
+                }) && shared
+                    .shown
+                    .get(reference.trace)
+                    .copied()
+                    .unwrap_or(false)
+            }) {
+                let points = decimate::visible(
+                    &reference.points,
+                    link.x.range(),
+                    columns,
+                );
+                plot_ui.line(
+                    Line::new("", points)
+                        .color(color(reference.trace).gamma_multiply(0.28))
+                        .width(1.0),
+                );
+            }
             let top = *self.y.range().end();
             for channel in self.shown_channels(shared.channels, shared.shown) {
                 let points =
                     decimate::visible(&channel.points, link.x.range(), columns);
                 plot_ui.line(
                     Line::new(channel.name.as_str(), points)
-                        .color(color(channel.trace)),
+                        .color(color(channel.trace))
+                        .width(1.5),
                 );
             }
             for &(trace, at) in &link.markers {
@@ -171,6 +300,25 @@ impl Pane {
                             .anchor(Align2::LEFT_TOP),
                     );
                 }
+            }
+            for (trace, at, label) in shared.horizontal_markers {
+                if !shared.shown.get(*trace).copied().unwrap_or(false) {
+                    continue;
+                }
+                plot_ui.hline(
+                    egui_plot::HLine::new("", *at)
+                        .color(color(*trace).gamma_multiply(0.65))
+                        .style(LineStyle::dotted_dense()),
+                );
+                plot_ui.text(
+                    Text::new(
+                        "",
+                        PlotPoint::new(*link.x.range().start(), *at),
+                        label.as_str(),
+                    )
+                    .color(color(*trace))
+                    .anchor(Align2::LEFT_BOTTOM),
+                );
             }
             for (name, at) in [("A", link.a), ("B", link.b)] {
                 if let Some(at) = at {

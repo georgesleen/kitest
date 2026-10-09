@@ -266,7 +266,16 @@ fn check_corner<B: Backend>(
                         near,
                         within,
                     )?;
-                    (Some(check), waveform)
+                    let band = within.band(near);
+                    (
+                        Some(check.with_region(
+                            kitest_scope::Region::Frequency {
+                                low: near - band,
+                                high: near + band,
+                            },
+                        )),
+                        waveform,
+                    )
                 }
             },
         };

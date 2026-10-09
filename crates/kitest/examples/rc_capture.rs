@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     let bode = dir.join("rc-bode.json");
-    ac.capture().save(&bode)?;
+    ac.capture("rc-bode").save(&bode)?;
 
     let tran = ngspice.run_tran(
         RC,
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Tran::new(1e-5, 5e-3),
     )?;
     let step = dir.join("rc-step.json");
-    tran.capture().save(&step)?;
+    tran.capture("rc-step").save(&step)?;
 
     println!("{}\n{}", bode.display(), step.display());
     Ok(())

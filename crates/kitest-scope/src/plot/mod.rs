@@ -11,7 +11,7 @@ mod window;
 
 pub use view::View;
 
-use eframe::egui::{Color32, ecolor::Hsva};
+use eframe::egui::Color32;
 use egui_plot::{AxisHints, GridInput, GridMark, PlotPoint};
 use kitest_measure::Curve;
 
@@ -97,7 +97,9 @@ struct Channel {
     name: String,
     trace: usize,
     quantity: Quantity,
+    source_x: Vec<f64>,
     x: Vec<f64>,
+    source_y: Vec<f64>,
     y: Vec<f64>,
     points: Vec<PlotPoint>,
 }
@@ -120,7 +122,9 @@ impl Channel {
             name: name.to_owned(),
             trace,
             quantity,
+            source_x: x.clone(),
             x,
+            source_y: y.clone(),
             y,
             points,
         }
@@ -129,6 +133,28 @@ impl Channel {
     /// The channel as a curve to measure.
     fn curve(&self) -> Curve<'_> {
         Curve::new(&self.x, &self.y)
+    }
+
+    /// Replaces the displayed y values without changing the source values.
+    fn display(&mut self, y: Vec<f64>) {
+        self.points = self
+            .x
+            .iter()
+            .zip(&y)
+            .map(|(&x, &y)| PlotPoint::new(x, y))
+            .collect();
+        self.y = y;
+    }
+
+    /// Shifts displayed x values by `offset` from their source values.
+    fn shift_x(&mut self, offset: f64) {
+        self.x = self.source_x.iter().map(|x| x - offset).collect();
+        self.points = self
+            .x
+            .iter()
+            .zip(&self.y)
+            .map(|(&x, &y)| PlotPoint::new(x, y))
+            .collect();
     }
 }
 
@@ -174,8 +200,17 @@ fn axis(
 
 /// The fixed colour of the trace at `index`.
 pub fn color(index: usize) -> Color32 {
-    let golden_ratio = std::f32::consts::GOLDEN_RATIO - 1.0;
-    Hsva::new(index as f32 * golden_ratio, 0.85, 0.5, 1.0).into()
+    const PALETTE: [Color32; 8] = [
+        Color32::from_rgb(86, 180, 233),
+        Color32::from_rgb(230, 159, 0),
+        Color32::from_rgb(0, 158, 115),
+        Color32::from_rgb(240, 228, 66),
+        Color32::from_rgb(0, 114, 178),
+        Color32::from_rgb(213, 94, 0),
+        Color32::from_rgb(204, 121, 167),
+        Color32::from_rgb(160, 160, 160),
+    ];
+    PALETTE[index % PALETTE.len()]
 }
 
 #[cfg(test)]

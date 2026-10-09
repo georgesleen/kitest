@@ -10,6 +10,14 @@ use super::pane::{Action, Pane, Shared};
 use super::window::{Window, X_GRID_LINES};
 use super::{Channel, Quantity, Unit};
 
+/// A trace, level, and edge that align each run to time zero.
+#[derive(Debug, Clone, Copy)]
+struct Trigger {
+    trace: usize,
+    level: f64,
+    rising: bool,
+}
+
 /// What the panes of a view share: the x axis and its window, the hover
 /// line, the cursors, and the markers measurements place.
 pub(super) struct Link {
@@ -37,9 +45,15 @@ pub struct View {
     kind: &'static str,
     link: Link,
     channels: Vec<Channel>,
+    reference: Vec<Channel>,
     panes: Vec<Pane>,
+    expectations: Vec<kitest_scope::Expectation>,
+    fixed_markers: Vec<(usize, f64)>,
+    horizontal_markers: Vec<(usize, f64, String)>,
+    reference_trace: Option<usize>,
+    annotations: Vec<String>,
+    trigger: Option<Trigger>,
 }
-
 impl View {
     /// A view of `channels` over `x`, one pane per group of channel indices.
     ///
@@ -49,6 +63,7 @@ impl View {
         x: Quantity,
         channels: Vec<Channel>,
         groups: Vec<Vec<usize>>,
+        expectations: &[kitest_scope::Expectation],
     ) -> Self {
         let shown = vec![
             true;
@@ -74,7 +89,373 @@ impl View {
                 markers: Vec::new(),
             },
             channels,
+            reference: Vec::new(),
             panes,
+            expectations: expectations.to_vec(),
+            fixed_markers: Vec::new(),
+            horizontal_markers: Vec::new(),
+            reference_trace: None,
+            annotations: Vec::new(),
+            trigger: None,
+        }
+    }
+
+    /// Replaces the channels with `next`, keeping layout, cursors, and zoom
+    /// when both views have the same axes, and keeping this run as reference.
+    pub fn replace(&mut self, mut next: Self, shown: &[bool], refit: bool) {
+        if self.kind != next.kind || self.link.quantity != next.link.quantity {
+            *self = next;
+            return;
+        }
+        next.reference = std::mem::take(&mut self.channels);
+        next.trigger = self.trigger;
+        next.apply_trigger(refit);
+        next.link.a = self.link.a;
+        next.link.b = self.link.b;
+        next.link.hover = self.link.hover;
+        if !refit {
+            next.link.x = self.link.x;
+        }
+
+        let mut panes = Vec::new();
+        for old in &self.panes {
+            let indices: Vec<usize> = old
+                .channels
+                .iter()
+                .filter_map(|&index| {
+                    let channel = &next.reference[index];
+                    next.channels.iter().position(|candidate| {
+                        candidate.name == channel.name
+                            && candidate.quantity == channel.quantity
+                    })
+                })
+                .collect();
+            if !indices.is_empty() {
+                let mut pane = Pane::new(indices, &next.channels, shown);
+                pane.preserve(old, refit);
+                panes.push(pane);
+            }
+        }
+        if !panes.is_empty() {
+            next.panes = panes;
+        }
+        *self = next;
+    }
+
+    /// A spectrum view of this transient view's shown channels over the
+    /// visible time window, or `None` for another kind of view.
+    pub fn spectrum(&self, shown: &[bool]) -> Option<Self> {
+        if self.kind != "transient" {
+            return None;
+        }
+        let frequency = Quantity {
+            name: "frequency",
+            unit: Unit::Si("Hz"),
+            log: true,
+            measurements: &[],
+        };
+        let magnitude = Quantity {
+            name: "spectrum",
+            unit: Unit::Plain(" dBV"),
+            log: false,
+            measurements: super::measure::MAGNITUDE,
+        };
+        let over = self.link.x.range();
+        let mut channels = Vec::new();
+        let mut markers = Vec::new();
+        let mut horizontal_markers = Vec::new();
+        for channel in self.channels.iter().filter(|channel| {
+            shown.get(channel.trace).copied().unwrap_or(false)
+        }) {
+            let samples = channel
+                .x
+                .iter()
+                .filter(|at| over.contains(at))
+                .count()
+                .next_power_of_two()
+                .clamp(256, 65_536);
+            let spectrum = channel.curve().spectrum(over.clone(), samples)?;
+            let bin_width = spectrum.bin_width();
+            let x: Vec<f64> = (1..spectrum.amplitudes().len())
+                .map(|bin| (bin as f64 * bin_width).log10())
+                .collect();
+            let y: Vec<f64> = spectrum
+                .amplitudes()
+                .iter()
+                .skip(1)
+                .map(|amplitude| {
+                    20.0 * amplitude.max(f64::MIN_POSITIVE).log10()
+                })
+                .collect();
+            let noise =
+                20.0 * spectrum.noise_floor().max(f64::MIN_POSITIVE).log10();
+            horizontal_markers.push((
+                channel.trace,
+                noise,
+                format!("noise floor {:.1} dBV", noise),
+            ));
+            if let Some(tone) = spectrum.dominant() {
+                for harmonic in 1..=8 {
+                    let hertz = tone.hertz * harmonic as f64;
+                    if hertz <= 10f64.powf(*x.last()?) {
+                        markers.push((channel.trace, hertz.log10()));
+                    }
+                }
+            }
+            channels.push(Channel::new(
+                &channel.name,
+                channel.trace,
+                magnitude,
+                x,
+                y,
+            ));
+        }
+        if channels.is_empty() {
+            return None;
+        }
+        let all = (0..channels.len()).collect();
+        let mut view = Self::new(
+            "spectrum",
+            frequency,
+            channels,
+            vec![all],
+            &self.expectations,
+        );
+        view.fixed_markers = markers;
+        view.horizontal_markers = horizontal_markers;
+        Some(view)
+    }
+
+    /// Whether this transient view can align runs to a trigger.
+    pub fn can_trigger(&self) -> bool {
+        self.kind == "transient"
+    }
+
+    /// Whether cursor A supplies a level for a trigger.
+    pub fn can_set_trigger(&self) -> bool {
+        self.can_trigger() && self.link.a.is_some()
+    }
+
+    /// Aligns the first `trace` crossing of cursor A's level to time zero.
+    pub fn set_trigger(&mut self, trace: usize, rising: bool, shown: &[bool]) {
+        let Some(at) = self.link.a else { return };
+        let Some(channel) =
+            self.channels.iter().find(|channel| channel.trace == trace)
+        else {
+            return;
+        };
+        let Some(level) = channel.curve().at(at) else {
+            return;
+        };
+        self.trigger = Some(Trigger {
+            trace,
+            level,
+            rising,
+        });
+        self.apply_trigger(true);
+        for pane in &mut self.panes {
+            pane.fit(&self.channels, shown);
+        }
+    }
+
+    /// Clears the trigger and restores the capture's absolute time axis.
+    pub fn clear_trigger(&mut self, shown: &[bool]) {
+        self.trigger = None;
+        for channel in &mut self.channels {
+            channel.shift_x(0.0);
+        }
+        self.link.x = fit_x(&self.channels, shown);
+        self.link.a = None;
+    }
+
+    /// The trigger as a short status line.
+    pub fn trigger_line(&self) -> Option<String> {
+        let trigger = self.trigger?;
+        let channel = self
+            .channels
+            .iter()
+            .find(|channel| channel.trace == trigger.trace)?;
+        Some(format!(
+            "trigger {} {} through {}",
+            channel.name,
+            if trigger.rising { "rising" } else { "falling" },
+            channel
+                .quantity
+                .reading(trigger.level, trigger.level.abs().max(1e-12),)
+        ))
+    }
+
+    /// Applies the trigger to the current channels.
+    fn apply_trigger(&mut self, refit: bool) {
+        let Some(trigger) = self.trigger else { return };
+        let Some(channel) = self
+            .channels
+            .iter()
+            .find(|channel| channel.trace == trigger.trace)
+        else {
+            return;
+        };
+        let Some((&first, &last)) =
+            channel.source_x.first().zip(channel.source_x.last())
+        else {
+            return;
+        };
+        let curve =
+            kitest_measure::Curve::new(&channel.source_x, &channel.source_y);
+        let Some(crossing) = curve
+            .crossings(trigger.level, first..=last)
+            .into_iter()
+            .find(|crossing| crossing.rising == trigger.rising)
+        else {
+            return;
+        };
+        for channel in &mut self.channels {
+            channel.shift_x(crossing.x);
+        }
+        if refit {
+            let shown = vec![
+                true;
+                self.channels
+                    .iter()
+                    .map(|channel| channel.trace + 1)
+                    .max()
+                    .unwrap_or(0)
+            ];
+            self.link.x = fit_x(&self.channels, &shown);
+        }
+        self.link.a = Some(0.0);
+    }
+
+    /// Whether this view can divide its responses by a reference trace.
+    pub fn can_reference(&self) -> bool {
+        self.kind == "AC sweep"
+    }
+
+    /// The trace the responses are divided by, or `None` for absolute responses.
+    pub fn reference_trace(&self) -> Option<usize> {
+        self.reference_trace
+    }
+
+    /// Divides every magnitude and phase response by `trace`, or restores the
+    /// absolute responses for `None`.
+    pub fn set_reference(&mut self, trace: Option<usize>, shown: &[bool]) {
+        if !self.can_reference() {
+            return;
+        }
+        for quantity in ["magnitude", "phase"] {
+            let reference = trace.and_then(|trace| {
+                self.channels
+                    .iter()
+                    .find(|channel| {
+                        channel.trace == trace
+                            && channel.quantity.name == quantity
+                    })
+                    .map(|channel| channel.source_y.clone())
+            });
+            for channel in self
+                .channels
+                .iter_mut()
+                .filter(|channel| channel.quantity.name == quantity)
+            {
+                let y = match &reference {
+                    Some(reference) => channel
+                        .source_y
+                        .iter()
+                        .zip(reference)
+                        .map(|(value, reference)| value - reference)
+                        .collect(),
+                    None => channel.source_y.clone(),
+                };
+                channel.display(y);
+            }
+        }
+        self.reference_trace = trace;
+        self.update_margins(shown);
+        for pane in &mut self.panes {
+            pane.fit(&self.channels, shown);
+        }
+    }
+
+    /// A group-delay view of every shown phase response, or `None` for a
+    /// non-Bode view.
+    pub fn group_delay(&self, shown: &[bool]) -> Option<Self> {
+        if self.kind != "AC sweep" {
+            return None;
+        }
+        let delay = Quantity {
+            name: "group delay",
+            unit: Unit::Si("s"),
+            log: false,
+            measurements: super::measure::WAVEFORM,
+        };
+        let mut channels = Vec::new();
+        for phase in self.channels.iter().filter(|channel| {
+            channel.quantity.name == "phase"
+                && shown.get(channel.trace).copied().unwrap_or(false)
+        }) {
+            let frequency: Vec<f64> =
+                phase.x.iter().map(|x| 10f64.powf(*x)).collect();
+            let values = kitest_measure::group_delay(&frequency, &phase.y);
+            channels.push(Channel::new(
+                &phase.name,
+                phase.trace,
+                delay,
+                phase.x.clone(),
+                values,
+            ));
+        }
+        if channels.is_empty() {
+            return None;
+        }
+        let all = (0..channels.len()).collect();
+        Some(Self::new(
+            "group delay",
+            self.link.quantity,
+            channels,
+            vec![all],
+            &[],
+        ))
+    }
+
+    /// Recomputes the selected transfer functions' gain and phase margins.
+    fn update_margins(&mut self, shown: &[bool]) {
+        self.annotations.clear();
+        self.fixed_markers.clear();
+        for (trace, &shown) in shown.iter().enumerate() {
+            if !shown || Some(trace) == self.reference_trace {
+                continue;
+            }
+            let magnitude = self.channels.iter().find(|channel| {
+                channel.trace == trace && channel.quantity.name == "magnitude"
+            });
+            let phase = self.channels.iter().find(|channel| {
+                channel.trace == trace && channel.quantity.name == "phase"
+            });
+            let (Some(magnitude), Some(phase)) = (magnitude, phase) else {
+                continue;
+            };
+            if let Some((at, margin)) =
+                kitest_measure::gain_margin(magnitude.curve(), phase.curve())
+            {
+                self.fixed_markers.push((trace, at));
+                self.annotations.push(format!(
+                    "{} gain margin {:.2} dB at {}",
+                    magnitude.name,
+                    margin,
+                    self.link.quantity.reading(at, self.link.x.grid_spacing())
+                ));
+            }
+            if let Some((at, margin)) =
+                kitest_measure::phase_margin(magnitude.curve(), phase.curve())
+            {
+                self.fixed_markers.push((trace, at));
+                self.annotations.push(format!(
+                    "{} phase margin {:.2} deg at {}",
+                    magnitude.name,
+                    margin,
+                    self.link.quantity.reading(at, self.link.x.grid_spacing())
+                ));
+            }
         }
     }
 
@@ -90,20 +471,28 @@ impl View {
         } else {
             ui.weak("Press A or B over a plot to place a cursor; right-click a plot for panes and measurements.");
         }
+        for annotation in &self.annotations {
+            ui.weak(annotation);
+        }
         self.link.markers = self.markers(shown);
 
         let quantities: Vec<Quantity> =
             self.panes.iter().map(|pane| pane.quantity).collect();
         let shared = Shared {
             channels: &self.channels,
+            reference: &self.reference,
             shown,
             panes: &quantities,
+            expectations: &self.expectations,
+            horizontal_markers: &self.horizontal_markers,
         };
         let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
         let strips: f32 = self
             .panes
             .iter()
-            .map(|pane| pane.strip_rows(&self.link, &shared) as f32 * row)
+            .map(|pane| {
+                (pane.strip_rows(&self.link, &shared) as f32 + 1.0) * row
+            })
             .sum();
         let gaps =
             ui.spacing().item_spacing.y * (self.panes.len() as f32 + 1.0);
@@ -154,7 +543,7 @@ impl View {
     /// Where the -3 dB measurement of each shown channel places a marker.
     fn markers(&self, shown: &[bool]) -> Vec<(usize, f64)> {
         let over = self.link.over();
-        let mut markers = Vec::new();
+        let mut markers = self.fixed_markers.clone();
         for pane in self
             .panes
             .iter()
@@ -330,7 +719,7 @@ mod tests {
                 )
             })
             .collect();
-        View::new("transient", TIME, channels, vec![vec![0, 1, 2]])
+        View::new("transient", TIME, channels, vec![vec![0, 1, 2]], &[])
     }
 
     #[test]
@@ -378,5 +767,25 @@ mod tests {
             csv,
             "time (s),v0 voltage (V),v2 voltage (V)\n1,0,2\n2,0,2\n"
         );
+    }
+
+    #[test]
+    fn trigger_aligns_the_selected_crossing_to_zero() {
+        let channel = Channel::new(
+            "clk",
+            0,
+            VOLTAGE,
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![0.0, 1.0, 0.0, 1.0],
+        );
+        let mut view =
+            View::new("transient", TIME, vec![channel], vec![vec![0]], &[]);
+        view.link.a = Some(0.5);
+        view.set_trigger(0, true, &[true]);
+        assert_eq!(view.channels[0].x, [-0.5, 0.5, 1.5, 2.5]);
+        assert_eq!(view.link.a, Some(0.0));
+        assert!(view.trigger_line().unwrap().contains("clk rising"));
+        view.clear_trigger(&[true]);
+        assert_eq!(view.channels[0].x, [0.0, 1.0, 2.0, 3.0]);
     }
 }

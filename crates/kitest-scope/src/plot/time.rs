@@ -22,7 +22,11 @@ const VOLTAGE: Quantity = Quantity {
 };
 
 /// One voltage channel per trace against `time` in seconds, all in one pane.
-pub fn view(time: &[f64], traces: &[Trace]) -> View {
+pub fn view(
+    time: &[f64],
+    traces: &[Trace],
+    expectations: &[kitest_scope::Expectation],
+) -> View {
     let channels: Vec<Channel> = traces
         .iter()
         .enumerate()
@@ -37,5 +41,5 @@ pub fn view(time: &[f64], traces: &[Trace]) -> View {
         })
         .collect();
     let all = (0..channels.len()).collect();
-    View::new("transient", TIME, channels, vec![all])
+    View::new("transient", TIME, channels, vec![all], expectations)
 }

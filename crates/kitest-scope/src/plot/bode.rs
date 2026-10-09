@@ -34,7 +34,11 @@ const PHASE: Quantity = Quantity {
 
 /// A magnitude pane above a phase pane, with one channel of each per trace
 /// against `frequency` in hertz.
-pub fn view(frequency: &[f64], traces: &[AcTrace]) -> View {
+pub fn view(
+    frequency: &[f64],
+    traces: &[AcTrace],
+    expectations: &[kitest_scope::Expectation],
+) -> View {
     let mut magnitudes = Vec::new();
     let mut phases = Vec::new();
     for (index, trace) in traces.iter().enumerate() {
@@ -55,6 +59,7 @@ pub fn view(frequency: &[f64], traces: &[AcTrace]) -> View {
         FREQUENCY,
         channels,
         vec![(0..count).collect(), (count..2 * count).collect()],
+        expectations,
     )
 }
 

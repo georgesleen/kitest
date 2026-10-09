@@ -25,6 +25,8 @@ __pycache__/
 # The compiled extension make pytest links into the package source
 *.so
 
+# kitest captures
+.kitest/
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

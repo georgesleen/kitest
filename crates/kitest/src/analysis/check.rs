@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use kitest_scope::{Expectation, Region};
+
 use super::{Signal, Tolerance};
 
 /// Whether an assertion passed, and a sentence saying why.
@@ -10,12 +12,17 @@ use super::{Signal, Tolerance};
 pub struct Check {
     passed: bool,
     message: String,
+    region: Option<Region>,
 }
 
 impl Check {
     /// A check with a message written by the caller.
     pub fn new(passed: bool, message: String) -> Self {
-        Self { passed, message }
+        Self {
+            passed,
+            message,
+            region: None,
+        }
     }
 
     /// Whether `measured` is within `tolerance` of `expected`, in `unit`.
@@ -68,7 +75,23 @@ impl Check {
                 )
             }
         };
-        Self::new(passed, message)
+        let check = Self::new(passed, message);
+        signal
+            .time()
+            .first()
+            .zip(signal.time().last())
+            .and_then(|(&first, &last)| {
+                (last - first >= window).then(|| {
+                    let band = tolerance.band(target);
+                    Region::Band {
+                        start: last - window,
+                        end: last,
+                        low: target - band,
+                        high: target + band,
+                    }
+                })
+            })
+            .map_or(check.clone(), |region| check.with_region(region))
     }
 
     /// Whether the assertion passed.
@@ -79,6 +102,23 @@ impl Check {
     /// What was measured against what was expected.
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Sets where the check holds the trace.
+    pub fn with_region(mut self, region: Region) -> Self {
+        self.region = Some(region);
+        self
+    }
+
+    /// The expectation to draw on `trace`, or `None` when the check has no
+    /// region on a capture.
+    pub fn expectation(&self, trace: &str) -> Option<Expectation> {
+        Some(Expectation {
+            trace: trace.to_owned(),
+            passed: self.passed,
+            message: self.message.clone(),
+            region: self.region?,
+        })
     }
 }
 
@@ -129,5 +169,29 @@ mod tests {
     fn near_passes_on_the_band_edge_and_fails_past_it() {
         assert!(Check::near(2.525, 2.5, Tolerance::percent(1.0), "V").passed());
         assert!(!Check::near(2.53, 2.5, Tolerance::percent(1.0), "V").passed());
+    }
+
+    #[test]
+    fn settles_carries_its_time_and_voltage_band_into_an_expectation() {
+        let time = [0.0, 1.0, 2.0, 3.0];
+        let values = [0.0, 0.96, 0.98, 1.0];
+        let check = Check::settles(
+            &Signal::new(&time, &values),
+            1.0,
+            Tolerance::abs(0.05),
+            2.0,
+        );
+        let expectation = check.expectation("out").unwrap();
+        assert!(expectation.passed);
+        assert_eq!(expectation.trace, "out");
+        assert_eq!(
+            expectation.region,
+            Region::Band {
+                start: 1.0,
+                end: 3.0,
+                low: 0.95,
+                high: 1.05,
+            }
+        );
     }
 }
