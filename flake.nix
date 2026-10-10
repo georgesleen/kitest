@@ -14,10 +14,15 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           # Every Python dependency comes from nixpkgs: matplotlib backs
-          # kitest.scope, pytest runs the tests, maturin builds release wheels.
+          # kitest.scope, pytest runs the tests, mkdocs builds the docs site,
+          # maturin builds release wheels.
           pythonEnv = pkgs.python3.withPackages (ps: [
             ps.matplotlib
             ps.pytest
+            ps.mkdocs
+            ps.mkdocs-material
+            ps.mkdocstrings
+            ps.mkdocstrings-python
           ]);
         in
         {

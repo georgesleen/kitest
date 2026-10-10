@@ -1,14 +1,32 @@
-# KiTest
-Simulation-based tests for KiCad designs, with a pure Rust engine and Python
-bindings.
+# kitest
 
+[![CI](https://github.com/georgesleen/kitest/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/georgesleen/kitest/actions/workflows/ci.yml)
+
+kitest is a simulation-based test framework for KiCad designs. You place probe
+symbols in the schematic, and each probe states what a net must do. kitest
+exports the schematic with `kicad-cli`, simulates it in ngspice, and reports
+which probes pass. The engine is in Rust, and a thin PyO3 binding exposes it
+to Python test benches.
+
+## Quick start
+
+The nix dev shell supplies Rust, KiCad, ngspice, and Python.
+
+```sh
+nix develop
+make test
+cargo run -p kitest -- examples/kicad/colpitts
+```
+
+## Documentation
+
+- The docs site: <https://georgesleen.com/kitest/>
+- How a ticket goes from claim to merge: [docs/workflow.md](docs/workflow.md)
 - [Probe Expect fields](docs/expect.md): DC and oscillation checks, tolerances,
   swing and harmonic-distortion limits, and simulation limits.
 - [Scope reference](docs/scope.md): Rust/Python captures, JSON v2, waveform,
   spectrum and Bode views, controls, measurements, exports, and live commands.
 - [Pending scope designs](docs/scope-next.md): proposals, not implemented APIs.
-- [Architecture](docs/architecture.md)
-- [Roadmap](docs/roadmap.md)
 
 `kitest --show PROBE [PROJECT]` runs checks and opens the probe's waveform in
 `kitest-scope`; `kitest --sketch PROBE [PROJECT]` prints it in the terminal.
