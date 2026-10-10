@@ -9,13 +9,12 @@ pub mod time;
 mod view;
 mod window;
 
+pub use measure::Measurement;
 pub use view::View;
 
 use eframe::egui::Color32;
 use egui_plot::{AxisHints, GridInput, GridMark, PlotPoint};
 use kitest_measure::Curve;
-
-use measure::Measurement;
 
 /// What a plot axis measures: its name, its unit, whether the axis holds
 /// the base-10 logarithm of the value, and what a channel of it can be

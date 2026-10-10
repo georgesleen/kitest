@@ -1,9 +1,11 @@
 //! A view: a stack of panes sharing one x axis, a hover line, and cursors.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::ops::RangeInclusive;
 
 use eframe::egui;
+use serde::Serialize;
 
 use super::measure::{Measurement, Value};
 use super::pane::{Action, Pane, Shared};
@@ -244,14 +246,26 @@ impl View {
     /// Aligns the first `trace` crossing of cursor A's level to time zero.
     pub fn set_trigger(&mut self, trace: usize, rising: bool, shown: &[bool]) {
         let Some(at) = self.link.a else { return };
-        let Some(channel) =
-            self.channels.iter().find(|channel| channel.trace == trace)
+        let Some(level) = self
+            .channels
+            .iter()
+            .find(|channel| channel.trace == trace)
+            .and_then(|channel| channel.curve().at(at))
         else {
             return;
         };
-        let Some(level) = channel.curve().at(at) else {
-            return;
-        };
+        self.set_trigger_level(trace, level, rising, shown);
+    }
+
+    /// Aligns the first `trace` crossing of `level`, on the given edge, to
+    /// time zero.
+    pub fn set_trigger_level(
+        &mut self,
+        trace: usize,
+        level: f64,
+        rising: bool,
+        shown: &[bool],
+    ) {
         self.trigger = Some(Trigger {
             trace,
             level,
@@ -674,6 +688,355 @@ impl View {
         }
         csv
     }
+}
+
+/// What a view shows, in real units, for a client of the command protocol.
+#[derive(Debug, Serialize)]
+pub struct State {
+    /// The kind of view, such as `transient`, `AC sweep`, or `spectrum`.
+    pub kind: &'static str,
+    pub x: Axis,
+    pub panes: Vec<PaneState>,
+    /// The cursors on the x axis, in its unit.
+    pub cursors: [Option<f64>; 2],
+    pub trigger: Option<String>,
+    /// The trace the responses are divided by, by name.
+    pub reference: Option<String>,
+    /// Margins and similar readings the view prints.
+    pub annotations: Vec<String>,
+    pub expectations: Vec<kitest_scope::Expectation>,
+}
+
+/// One axis: what it measures and the window it shows, in its unit.
+#[derive(Debug, Serialize)]
+pub struct Axis {
+    pub quantity: &'static str,
+    pub unit: &'static str,
+    pub log: bool,
+    pub range: [f64; 2],
+}
+
+/// One pane: its y axis, the channels in it, and what it measures.
+#[derive(Debug, Serialize)]
+pub struct PaneState {
+    pub y: Axis,
+    pub channels: Vec<String>,
+    pub measurements: Vec<Measurement>,
+}
+
+/// One measurement's result, or `null` when the window does not define it.
+#[derive(Debug, Serialize)]
+pub struct Reading {
+    pub value: ReadingValue,
+    pub unit: &'static str,
+}
+
+/// A reading's number, or its places for a measurement that finds several.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ReadingValue {
+    One(f64),
+    Many(Vec<f64>),
+}
+
+impl View {
+    /// What the view shows, in real units.
+    ///
+    /// `shown` holds one flag per trace.
+    pub fn state(&self, shown: &[bool]) -> State {
+        let x = self.link.quantity;
+        let real = |at: Option<f64>| at.map(|at| x.value(at));
+        State {
+            kind: self.kind,
+            x: Axis {
+                quantity: x.name,
+                unit: x.unit.symbol(),
+                log: x.log,
+                range: self.real_range(self.link.x.range()),
+            },
+            panes: self
+                .panes
+                .iter()
+                .map(|pane| PaneState {
+                    y: Axis {
+                        quantity: pane.quantity.name,
+                        unit: pane.quantity.unit.symbol(),
+                        log: false,
+                        range: [*pane.y.range().start(), *pane.y.range().end()],
+                    },
+                    channels: pane
+                        .shown_channels(&self.channels, shown)
+                        .map(|channel| channel.name.clone())
+                        .collect(),
+                    measurements: pane.measurements.clone(),
+                })
+                .collect(),
+            cursors: [real(self.link.a), real(self.link.b)],
+            trigger: self.trigger_line(),
+            reference: self.reference_trace.and_then(|trace| {
+                self.channels
+                    .iter()
+                    .find(|channel| channel.trace == trace)
+                    .map(|channel| channel.name.clone())
+            }),
+            annotations: self.annotations.clone(),
+            expectations: self.expectations.clone(),
+        }
+    }
+
+    /// Shows `range` on the x axis, in its unit.
+    ///
+    /// # Errors
+    ///
+    /// When an end lies off a log axis or the ends are equal.
+    pub fn zoom_x(&mut self, range: [f64; 2]) -> Result<(), String> {
+        let [a, b] = [self.plot(range[0])?, self.plot(range[1])?];
+        if a == b {
+            return Err("an x range needs two different ends".to_owned());
+        }
+        self.link.x.zoom_to(a, b);
+        Ok(())
+    }
+
+    /// Shows `range` on pane `pane`'s y axis, in its unit.
+    ///
+    /// # Errors
+    ///
+    /// When the view has no such pane or the ends are equal.
+    pub fn zoom_y(
+        &mut self,
+        pane: usize,
+        range: [f64; 2],
+    ) -> Result<(), String> {
+        let count = self.panes.len();
+        let pane = self.panes.get_mut(pane).ok_or_else(|| {
+            format!("there is no pane {pane}; the view has {count}")
+        })?;
+        if range[0] == range[1] {
+            return Err("a y range needs two different ends".to_owned());
+        }
+        pane.y.zoom_to(range[0], range[1]);
+        Ok(())
+    }
+
+    /// Fits the x axis and every pane to the shown traces.
+    pub fn fit(&mut self, shown: &[bool]) {
+        self.apply(Action::Fit, shown);
+    }
+
+    /// Places cursors A and B in the x axis's unit, removing any that is `None`.
+    ///
+    /// # Errors
+    ///
+    /// When a position lies off a log axis.
+    pub fn set_cursors(
+        &mut self,
+        a: Option<f64>,
+        b: Option<f64>,
+    ) -> Result<(), String> {
+        let a = a.map(|a| self.plot(a)).transpose()?;
+        let b = b.map(|b| self.plot(b)).transpose()?;
+        (self.link.a, self.link.b) = (a, b);
+        Ok(())
+    }
+
+    /// Each of `measurements` of the channel of `trace`, over `over` in the x
+    /// axis's unit, or else between the cursors or across the visible window.
+    ///
+    /// `quantity` picks among channels of one trace, such as `phase`; the
+    /// trace's first channel is measured without it.
+    ///
+    /// # Errors
+    ///
+    /// When no channel matches, or a measurement does not apply to its quantity.
+    pub fn measure(
+        &self,
+        trace: &str,
+        quantity: Option<&str>,
+        measurements: &[Measurement],
+        over: Option<[f64; 2]>,
+    ) -> Result<BTreeMap<Measurement, Option<Reading>>, String> {
+        let channel = self.channel(trace, quantity)?;
+        let over = match over {
+            Some([a, b]) => {
+                let (a, b) = (self.plot(a)?, self.plot(b)?);
+                a.min(b)..=a.max(b)
+            }
+            None => self.link.over(),
+        };
+        let x = self.link.quantity;
+        let mut readings = BTreeMap::new();
+        for &measurement in measurements {
+            if !channel.quantity.measurements.contains(&measurement) {
+                return Err(format!(
+                    "{} cannot be measured for {}; it takes {}",
+                    measurement.label(),
+                    channel.quantity.name,
+                    names(channel.quantity.measurements)
+                ));
+            }
+            let reading =
+                measurement.of(channel.curve(), over.clone()).map(|value| {
+                    match value {
+                        Value::Level(level) => Reading {
+                            value: ReadingValue::One(level),
+                            unit: channel.quantity.unit.symbol(),
+                        },
+                        Value::Duration(duration) => Reading {
+                            value: ReadingValue::One(duration),
+                            unit: x.unit.symbol(),
+                        },
+                        Value::Rate(rate) => Reading {
+                            value: ReadingValue::One(rate),
+                            unit: "Hz",
+                        },
+                        Value::Positions(positions) => Reading {
+                            value: ReadingValue::Many(
+                                positions
+                                    .into_iter()
+                                    .map(|at| x.value(at))
+                                    .collect(),
+                            ),
+                            unit: x.unit.symbol(),
+                        },
+                    }
+                });
+            readings.insert(measurement, reading);
+        }
+        Ok(readings)
+    }
+
+    /// Sets what pane `pane` measures and shows in its strip.
+    ///
+    /// # Errors
+    ///
+    /// When the view has no such pane, or a measurement does not apply to it.
+    pub fn set_measurements(
+        &mut self,
+        pane: usize,
+        measurements: Vec<Measurement>,
+    ) -> Result<(), String> {
+        let count = self.panes.len();
+        let pane = self.panes.get_mut(pane).ok_or_else(|| {
+            format!("there is no pane {pane}; the view has {count}")
+        })?;
+        if let Some(other) = measurements.iter().find(|measurement| {
+            !pane.quantity.measurements.contains(measurement)
+        }) {
+            return Err(format!(
+                "a {} pane cannot measure {}; it takes {}",
+                pane.quantity.name,
+                other.label(),
+                names(pane.quantity.measurements)
+            ));
+        }
+        pane.measurements = measurements;
+        Ok(())
+    }
+
+    /// Moves the channel of `trace` into pane `to`, or into a new pane for `None`.
+    ///
+    /// # Errors
+    ///
+    /// When no channel matches, the pane does not exist, or it holds another quantity.
+    pub fn move_channel(
+        &mut self,
+        trace: &str,
+        quantity: Option<&str>,
+        to: Option<usize>,
+        shown: &[bool],
+    ) -> Result<(), String> {
+        let channel = self.channel(trace, quantity)?;
+        let index = self
+            .channels
+            .iter()
+            .position(|other| std::ptr::eq(other, channel))
+            .expect("the channel is the view's own");
+        if let Some(to) = to {
+            let pane = self.panes.get(to).ok_or_else(|| {
+                format!(
+                    "there is no pane {to}; the view has {}",
+                    self.panes.len()
+                )
+            })?;
+            if pane.quantity != channel.quantity {
+                return Err(format!(
+                    "pane {to} holds {}, not {}",
+                    pane.quantity.name, channel.quantity.name
+                ));
+            }
+        }
+        self.apply(Action::Move { channel: index, to }, shown);
+        Ok(())
+    }
+
+    /// The channel of `trace`, the one of `quantity` when given.
+    fn channel(
+        &self,
+        trace: &str,
+        quantity: Option<&str>,
+    ) -> Result<&Channel, String> {
+        self.channels
+            .iter()
+            .find(|channel| {
+                channel.name == trace
+                    && quantity.is_none_or(|quantity| {
+                        channel.quantity.name == quantity
+                    })
+            })
+            .ok_or_else(|| {
+                let mut known: Vec<String> = self
+                    .channels
+                    .iter()
+                    .map(|channel| {
+                        format!("{} ({})", channel.name, channel.quantity.name)
+                    })
+                    .collect();
+                known.dedup();
+                format!(
+                    "no trace {trace} here; the view has {}",
+                    known.join(", ")
+                )
+            })
+    }
+
+    /// `value`, in the x axis's unit, in plot coordinates.
+    fn plot(&self, value: f64) -> Result<f64, String> {
+        if !value.is_finite() {
+            return Err(format!("{value} is not a finite position"));
+        }
+        if self.link.quantity.log {
+            if value <= 0.0 {
+                return Err(format!(
+                    "{value} lies off the log {} axis",
+                    self.link.quantity.name
+                ));
+            }
+            Ok(value.log10())
+        } else {
+            Ok(value)
+        }
+    }
+
+    /// `range`, in plot coordinates, in the x axis's unit.
+    fn real_range(&self, range: RangeInclusive<f64>) -> [f64; 2] {
+        let x = self.link.quantity;
+        [x.value(*range.start()), x.value(*range.end())]
+    }
+}
+
+/// The protocol names of `measurements`, comma separated.
+fn names(measurements: &[Measurement]) -> String {
+    measurements
+        .iter()
+        .map(|measurement| {
+            serde_json::to_value(measurement)
+                .ok()
+                .and_then(|name| name.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The x window holding every shown channel, or every channel if none is shown.

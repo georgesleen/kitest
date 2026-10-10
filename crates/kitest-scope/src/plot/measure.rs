@@ -3,9 +3,13 @@
 use std::ops::RangeInclusive;
 
 use kitest_measure::Curve;
+use serde::{Deserialize, Serialize};
 
 /// One measurement of a channel over a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Measurement {
     Min,
     Max,

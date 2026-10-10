@@ -1,42 +1,161 @@
-//! `kitest-scope FILE`: open a scope file in a window.
+//! `kitest-scope`: open a scope file in the one live window, or drive and
+//! query the scope with JSON-RPC commands.
 
+mod control;
 mod live;
+mod model;
 mod plot;
 mod save;
 
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::mpsc::{Receiver, Sender};
 
 use eframe::egui;
-use kitest_scope::Capture;
+use serde_json::Value as Json;
 
-use save::{Choice, Dialog, Format};
+use control::{Command, Format, ViewName};
+use model::Model;
+use save::{Choice, Dialog};
+
+const USAGE: &str = "usage: kitest-scope FILE\n\
+                     \x20      kitest-scope ctl METHOD [PARAMS]\n\
+                     \x20      kitest-scope query FILE METHOD [PARAMS]\n\
+                     FILE opens in the one live window, which a later launch reuses.\n\
+                     ctl sends one JSON-RPC command to that window and prints its result.\n\
+                     query applies one command to FILE without a window.\n\
+                     PARAMS is a JSON object, such as '{\"trace\":\"/OUT\",\"measurements\":[\"rms\"]}'.\n\
+                     Methods: ";
 
 fn main() -> ExitCode {
-    let mut args = std::env::args_os().skip(1);
-    let (Some(path), None) = (args.next(), args.next()) else {
-        eprintln!("usage: kitest-scope FILE");
-        return ExitCode::from(2);
-    };
-    let path = PathBuf::from(path);
-    let (paths, socket) = match live::connect_or_listen(&path) {
-        Ok(live::Instance::Forwarded) => return ExitCode::SUCCESS,
-        Ok(live::Instance::Owner { paths, _socket }) => (paths, _socket),
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let strings: Vec<&str> =
+        args.iter().filter_map(|arg| arg.to_str()).collect();
+    match strings.as_slice() {
+        ["-h" | "--help"] => {
+            println!("{USAGE}{}", control::METHODS.join(", "));
+            ExitCode::SUCCESS
+        }
+        ["ctl", method, params @ ..] if params.len() <= 1 => {
+            ctl(method, params.first().copied())
+        }
+        ["query", file, method, params @ ..] if params.len() <= 1 => {
+            query(&PathBuf::from(file), method, params.first().copied())
+        }
+        _ if args.len() == 1 => window(PathBuf::from(&args[0])),
+        _ => {
+            eprintln!("{USAGE}{}", control::METHODS.join(", "));
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Sends one command to the live window and prints its result.
+fn ctl(method: &str, params: Option<&str>) -> ExitCode {
+    let params = match params.map(serde_json::from_str::<Json>).transpose() {
+        Ok(params) => params,
         Err(error) => {
-            eprintln!("error: single scope window: {error}");
+            eprintln!("error: PARAMS is not JSON: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    match control::call(&live::socket_path(), method, params) {
+        Ok(result) => print_json(&result),
+        Err(control::ClientError::NoWindow) => {
+            eprintln!(
+                "error: no scope window is running; start one with kitest-scope FILE"
+            );
+            ExitCode::from(2)
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Applies one command to `file` without a window and prints its result.
+fn query(
+    file: &std::path::Path,
+    method: &str,
+    params: Option<&str>,
+) -> ExitCode {
+    let mut model = match Model::load(file) {
+        Ok(model) => model,
+        Err(error) => {
+            eprintln!("error: {}: {error}", file.display());
+            return ExitCode::from(2);
+        }
+    };
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": match params.map(serde_json::from_str::<Json>).transpose() {
+            Ok(params) => params,
+            Err(error) => {
+                eprintln!("error: PARAMS is not JSON: {error}");
+                return ExitCode::from(2);
+            }
+        },
+    });
+    match control::parse(&request.to_string())
+        .command
+        .and_then(|command| model.apply(command))
+    {
+        Ok(result) => print_json(&result),
+        Err(error) => {
+            eprintln!("error: {} (code {})", error.message, error.code);
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Prints `json` indented, and succeeds.
+fn print_json(json: &Json) -> ExitCode {
+    match serde_json::to_string_pretty(json) {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Opens `path` in the live window, starting it when none runs.
+fn window(path: PathBuf) -> ExitCode {
+    let (requests, context, socket) = match live::connect_or_listen(&path) {
+        Ok(live::Instance::Forwarded) => return ExitCode::SUCCESS,
+        Ok(live::Instance::Owner {
+            requests,
+            context,
+            socket,
+        }) => (requests, context, socket),
+        Err(error) => {
+            eprintln!("error: {}: {error}", path.display());
             return ExitCode::from(1);
         }
     };
-    let capture = match Capture::load(&path) {
-        Ok(capture) => capture,
+    let model = match Model::load(&path) {
+        Ok(model) => model,
         Err(error) => {
             eprintln!("error: {}: {error}", path.display());
             return ExitCode::from(2);
         }
     };
-
-    let file = file_name(&path);
-    let app = Scope::new(path, file, capture, paths, socket);
+    let app = Scope {
+        title: String::new(),
+        model,
+        dialog: None,
+        screenshot: None,
+        message: None,
+        requests,
+        _socket: socket,
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_app_id("kitest-scope"),
         ..Default::default()
@@ -44,7 +163,10 @@ fn main() -> ExitCode {
     match eframe::run_native(
         "kitest scope",
         options,
-        Box::new(|_| Ok(Box::new(app))),
+        Box::new(move |creation| {
+            let _ = context.set(creation.egui_ctx.clone());
+            Ok(Box::new(app))
+        }),
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -54,166 +176,85 @@ fn main() -> ExitCode {
     }
 }
 
-/// A view derived from the capture's primary waveform or Bode response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Derived {
-    Spectrum,
-    GroupDelay,
+/// A PNG on its way: the file it goes to, and the request waiting on it.
+struct Screenshot {
+    path: PathBuf,
+    waiting: Option<(Json, Sender<String>)>,
 }
 
-/// The window: the capture's view, which traces are shown, and the state
-/// of a save.
+/// The window: the model it shows, and the state of saves and requests.
 struct Scope {
-    path: PathBuf,
-    file: String,
-    capture_name: String,
-    family: Vec<Capture>,
-    names: Vec<String>,
-    view: plot::View,
-    alternate: Option<plot::View>,
-    derived: Option<Derived>,
-    shown: Vec<bool>,
+    title: String,
+    model: Model,
     dialog: Option<Dialog>,
-    screenshot_to: Option<PathBuf>,
+    screenshot: Option<Screenshot>,
     message: Option<String>,
-    modified: Option<std::time::SystemTime>,
-    paths: std::sync::mpsc::Receiver<PathBuf>,
+    requests: Receiver<live::Envelope>,
     _socket: live::Socket,
 }
 
 impl Scope {
-    fn new(
-        path: PathBuf,
-        file: String,
-        capture: Capture,
-        paths: std::sync::mpsc::Receiver<PathBuf>,
-        socket: live::Socket,
-    ) -> Self {
-        let (names, view) = capture_view(&capture);
-        let shown = vec![true; names.len()];
-        let derived = initial_derived(&capture);
-        let alternate = match derived {
-            Some(Derived::Spectrum) => view.spectrum(&shown),
-            Some(Derived::GroupDelay) => view.group_delay(&shown),
-            None => None,
-        };
-        Self {
-            modified: modified(&path),
-            path,
-            file,
-            capture_name: capture.name.clone(),
-            family: vec![capture],
-            shown,
-            names,
-            view,
-            alternate,
-            derived,
-            dialog: None,
-            screenshot_to: None,
-            message: None,
-            paths,
-            _socket: socket,
+    /// Carries out a command from a menu, reporting a refusal in the status bar.
+    fn run(&mut self, ctx: &egui::Context, command: Command) {
+        if let Err(error) = self.execute(ctx, command, None) {
+            self.message = Some(error.message);
         }
     }
 
-    /// Loads every capture later launches handed to this window.
-    fn receive_paths(&mut self, ctx: &egui::Context) {
-        let paths: Vec<PathBuf> = self.paths.try_iter().collect();
-        for path in paths {
-            self.open(path, ctx);
-        }
-    }
-
-    /// Reloads the current capture when its file changed.
-    fn reload(&mut self, ctx: &egui::Context) {
-        let modified = modified(&self.path);
-        if modified > self.modified {
-            self.open(self.path.clone(), ctx);
-        }
-    }
-
-    /// Opens `path` in this window, preserving state for the same capture.
-    fn open(&mut self, path: PathBuf, ctx: &egui::Context) {
-        match Capture::load(&path) {
-            Ok(capture) => {
-                let same = capture.name == self.capture_name;
-                if same {
-                    match self
-                        .family
-                        .iter()
-                        .position(|old| old.corner == capture.corner)
-                    {
-                        Some(index) => self.family[index] = capture,
-                        None => self.family.push(capture),
-                    }
-                } else {
-                    self.family = vec![capture];
+    /// Carries out `command`, which `waiting` asked for over the socket.
+    ///
+    /// A PNG replies once the screenshot arrives, so it returns `None`.
+    fn execute(
+        &mut self,
+        ctx: &egui::Context,
+        command: Command,
+        waiting: Option<(Json, Sender<String>)>,
+    ) -> Result<Option<Json>, control::Error> {
+        match command {
+            Command::Save {
+                format: Format::Png,
+                path,
+            } => {
+                if self.screenshot.is_some() {
+                    return Err(control::Error::failed(
+                        "a PNG is already being saved",
+                    ));
                 }
-                let capture = family_capture(&self.family);
-                let (names, view) = capture_view(&capture);
-                let shown: Vec<bool> = names
-                    .iter()
-                    .map(|name| {
-                        self.names
-                            .iter()
-                            .position(|old| old == name)
-                            .and_then(|index| self.shown.get(index).copied())
-                            .unwrap_or(true)
-                    })
-                    .collect();
-                if same {
-                    self.view.replace(view, &shown, false);
-                } else {
-                    self.view = view;
-                }
-                if !same {
-                    self.derived = initial_derived(&capture);
-                }
-                self.alternate = match self.derived {
-                    Some(Derived::Spectrum) => self.view.spectrum(&shown),
-                    Some(Derived::GroupDelay) => self.view.group_delay(&shown),
-                    None => None,
-                };
-                if self.alternate.is_none() {
-                    self.derived = None;
-                }
-                self.modified = modified(&path);
-                self.path = path;
-                self.file = file_name(&self.path);
-                self.capture_name = capture.name;
-                self.shown = shown;
-                self.names = names;
-                self.message = None;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                    "kitest scope: {}",
-                    self.file
-                )));
-            }
-            Err(error) => {
-                self.message =
-                    Some(format!("could not open {}: {error}", path.display()));
-            }
-        }
-    }
-
-    /// Carries out the save the dialog asked for.
-    fn save(&mut self, ctx: &egui::Context, path: PathBuf, format: Format) {
-        match format {
-            Format::Csv => {
-                let view = self.alternate.as_ref().unwrap_or(&self.view);
-                let result = std::fs::write(&path, view.csv(&self.shown));
-                self.report(&path, result.map_err(save::SaveError::from));
-            }
-            Format::Png => {
-                self.screenshot_to = Some(path);
+                self.screenshot = Some(Screenshot { path, waiting });
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
                     egui::UserData::default(),
                 ));
+                Ok(None)
+            }
+            command => {
+                let result = self.model.apply(command)?;
+                if let Some((id, reply)) = waiting {
+                    let _ = reply.send(control::reply(id, Ok(result.clone())));
+                }
+                Ok(Some(result))
             }
         }
     }
 
-    /// Writes a screenshot that arrived this frame to the file waiting for it.
+    /// Answers every request that arrived over the socket.
+    fn receive_requests(&mut self, ctx: &egui::Context) {
+        let envelopes: Vec<live::Envelope> = self.requests.try_iter().collect();
+        for envelope in envelopes {
+            let id = envelope.call.id;
+            let outcome = envelope.call.command.and_then(|command| {
+                self.execute(
+                    ctx,
+                    command,
+                    Some((id.clone(), envelope.reply.clone())),
+                )
+            });
+            if let Err(error) = outcome {
+                let _ = envelope.reply.send(control::reply(id, Err(error)));
+            }
+        }
+    }
+
+    /// Writes a screenshot that arrived this frame, and answers its request.
     fn receive_screenshot(&mut self, ctx: &egui::Context) {
         let image = ctx.input(|input| {
             input.events.iter().find_map(|event| match event {
@@ -221,153 +262,49 @@ impl Scope {
                 _ => None,
             })
         });
-        if let (Some(image), Some(path)) = (image, self.screenshot_to.take()) {
-            let result = save::write_png(&path, &image);
-            self.report(&path, result);
-        }
-    }
-
-    /// Records the outcome of a save for the status bar.
-    fn report(&mut self, path: &Path, result: Result<(), save::SaveError>) {
-        self.message = Some(match result {
-            Ok(()) => format!("saved {}", path.display()),
-            Err(error) => format!("could not save {}: {error}", path.display()),
+        let Some(image) = image else { return };
+        let Some(screenshot) = self.screenshot.take() else {
+            return;
+        };
+        let path = screenshot.path;
+        let outcome = save::write_png(&path, &image)
+            .map(|()| serde_json::json!({ "path": path }))
+            .map_err(|error| {
+                control::Error::failed(format!("{}: {error}", path.display()))
+            });
+        self.message = Some(match &outcome {
+            Ok(_) => format!("saved {}", path.display()),
+            Err(error) => error.message.clone(),
         });
-    }
-}
-
-/// The capture's trace names and plot view.
-fn capture_view(capture: &Capture) -> (Vec<String>, plot::View) {
-    match &capture.data {
-        kitest_scope::Data::Transient { time, traces } => (
-            traces.iter().map(|trace| trace.name.clone()).collect(),
-            plot::time::view(time, traces, &capture.expectations),
-        ),
-        kitest_scope::Data::Ac { frequency, traces } => (
-            traces.iter().map(|trace| trace.name.clone()).collect(),
-            plot::bode::view(frequency, traces, &capture.expectations),
-        ),
-    }
-}
-
-/// Captures of the same name as one capture, with each corner appended to its
-/// trace names.
-fn family_capture(captures: &[Capture]) -> Capture {
-    let first = captures
-        .first()
-        .expect("a scope family always has a capture");
-    if captures.len() == 1 {
-        return first.clone();
-    }
-    let suffix = |capture: &Capture| {
-        capture
-            .corner
-            .as_deref()
-            .map_or_else(String::new, |corner| format!(" [{corner}]"))
-    };
-    let mut expectations = Vec::new();
-    let data = match &first.data {
-        kitest_scope::Data::Transient { time, .. } => {
-            let mut traces = Vec::new();
-            for capture in captures {
-                let kitest_scope::Data::Transient {
-                    traces: capture_traces,
-                    ..
-                } = &capture.data
-                else {
-                    continue;
-                };
-                let suffix = suffix(capture);
-                traces.extend(capture_traces.iter().map(|trace| {
-                    kitest_scope::Trace {
-                        name: format!("{}{suffix}", trace.name),
-                        values: trace.values.clone(),
-                    }
-                }));
-                expectations.extend(capture.expectations.iter().cloned().map(
-                    |mut expectation| {
-                        expectation.trace =
-                            format!("{}{suffix}", expectation.trace);
-                        expectation
-                    },
-                ));
-            }
-            kitest_scope::Data::Transient {
-                time: time.clone(),
-                traces,
-            }
+        if let Some((id, reply)) = screenshot.waiting {
+            let _ = reply.send(control::reply(id, outcome));
         }
-        kitest_scope::Data::Ac { frequency, .. } => {
-            let mut traces = Vec::new();
-            for capture in captures {
-                let kitest_scope::Data::Ac {
-                    traces: capture_traces,
-                    ..
-                } = &capture.data
-                else {
-                    continue;
-                };
-                let suffix = suffix(capture);
-                traces.extend(capture_traces.iter().map(|trace| {
-                    kitest_scope::AcTrace {
-                        name: format!("{}{suffix}", trace.name),
-                        re: trace.re.clone(),
-                        im: trace.im.clone(),
-                    }
-                }));
-            }
-            kitest_scope::Data::Ac {
-                frequency: frequency.clone(),
-                traces,
-            }
-        }
-    };
-    Capture {
-        name: first.name.clone(),
-        corner: None,
-        data,
-        expectations,
     }
-}
-
-/// The instrument a capture opens in: the spectrum when every expectation
-/// lies on a frequency axis.
-fn initial_derived(capture: &Capture) -> Option<Derived> {
-    let spectral = !capture.expectations.is_empty()
-        && capture
-            .expectations
-            .iter()
-            .all(|expectation| expectation.region.is_spectral());
-    spectral.then_some(Derived::Spectrum)
-}
-
-/// `path`'s file name, or its display when it has none.
-fn file_name(path: &Path) -> String {
-    path.file_name().map_or_else(
-        || path.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    )
-}
-
-/// `path`'s last modification time, if it can be read.
-fn modified(path: &Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
 }
 
 impl eframe::App for Scope {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.receive_paths(&ctx);
+        self.receive_requests(&ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
-        self.reload(&ctx);
+        if self.model.changed_on_disk() {
+            let path = self.model.path().to_path_buf();
+            self.run(&ctx, Command::Open { path });
+        }
         self.receive_screenshot(&ctx);
+        if self.title != self.model.file() {
+            self.title = self.model.file();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+                "kitest scope: {}",
+                self.title
+            )));
+        }
         if ctx.input_mut(|input| {
             input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
         }) {
-            self.dialog = Some(Dialog::new(&self.path, Format::Png));
+            self.dialog = Some(Dialog::new(self.model.path(), Format::Png));
         }
+        let mut commands = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -375,107 +312,95 @@ impl eframe::App for Scope {
                         [(Format::Png, "Save PNG…"), (Format::Csv, "Save CSV…")]
                     {
                         if ui.button(label).clicked() {
-                            self.dialog = Some(Dialog::new(&self.path, format));
+                            self.dialog =
+                                Some(Dialog::new(self.model.path(), format));
                             ui.close();
                         }
                     }
                 });
                 ui.menu_button("View", |ui| {
-                    if ui
-                        .selectable_label(self.derived.is_none(), "Primary")
-                        .clicked()
-                    {
-                        self.derived = None;
-                        self.alternate = None;
-                        ui.close();
-                    }
-                    let spectrum = self.view.spectrum(&self.shown);
-                    if ui
-                        .add_enabled(
-                            spectrum.is_some(),
-                            egui::Button::selectable(
-                                self.derived == Some(Derived::Spectrum),
-                                "Spectrum",
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.alternate = spectrum;
-                        self.derived = Some(Derived::Spectrum);
-                        ui.close();
-                    }
-                    let delay = self.view.group_delay(&self.shown);
-                    if ui
-                        .add_enabled(
-                            delay.is_some(),
-                            egui::Button::selectable(
-                                self.derived == Some(Derived::GroupDelay),
-                                "Group delay",
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.alternate = delay;
-                        self.derived = Some(Derived::GroupDelay);
-                        ui.close();
+                    let views = self.model.views();
+                    for (name, label) in [
+                        (ViewName::Primary, "Primary"),
+                        (ViewName::Spectrum, "Spectrum"),
+                        (ViewName::GroupDelay, "Group delay"),
+                    ] {
+                        let selected = self.model.view_name() == name;
+                        if ui
+                            .add_enabled(
+                                views.contains(&name),
+                                egui::Button::selectable(selected, label),
+                            )
+                            .clicked()
+                        {
+                            commands.push(Command::View { name });
+                            ui.close();
+                        }
                     }
                 });
-                if self.view.can_reference() {
+                let primary = self.model.primary();
+                if primary.can_reference() {
                     ui.menu_button("Reference", |ui| {
+                        let current = primary.reference_trace();
                         if ui
                             .selectable_label(
-                                self.view.reference_trace().is_none(),
+                                current.is_none(),
                                 "Absolute response",
                             )
                             .clicked()
                         {
-                            self.view.set_reference(None, &self.shown);
+                            commands.push(Command::Reference { trace: None });
                             ui.close();
                         }
-                        for (trace, name) in self.names.iter().enumerate() {
+                        for (index, name) in
+                            self.model.names().iter().enumerate()
+                        {
                             if ui
-                                .selectable_label(
-                                    self.view.reference_trace() == Some(trace),
-                                    name,
-                                )
+                                .selectable_label(current == Some(index), name)
                                 .clicked()
                             {
-                                self.view
-                                    .set_reference(Some(trace), &self.shown);
+                                commands.push(Command::Reference {
+                                    trace: Some(name.clone()),
+                                });
                                 ui.close();
                             }
                         }
                     });
                 }
-                if self.view.can_trigger() {
+                if primary.can_trigger() {
                     ui.menu_button("Trigger", |ui| {
                         if ui.button("Clear").clicked() {
-                            self.view.clear_trigger(&self.shown);
+                            commands.push(Command::Trigger {
+                                trace: None,
+                                edge: control::Edge::Rising,
+                                level: None,
+                            });
                             ui.close();
                         }
-                        if !self.view.can_set_trigger() {
+                        let ready = primary.can_set_trigger();
+                        if !ready {
                             ui.weak(
                                 "Place cursor A at the trigger level first",
                             );
                         }
-                        for (trace, name) in self.names.iter().enumerate() {
+                        for name in self.model.names() {
                             ui.menu_button(name, |ui| {
-                                for (rising, label) in [
-                                    (true, "Rising edge"),
-                                    (false, "Falling edge"),
+                                for (edge, label) in [
+                                    (control::Edge::Rising, "Rising edge"),
+                                    (control::Edge::Falling, "Falling edge"),
                                 ] {
                                     if ui
                                         .add_enabled(
-                                            self.view.can_set_trigger(),
+                                            ready,
                                             egui::Button::new(label),
                                         )
                                         .clicked()
                                     {
-                                        self.view.set_trigger(
-                                            trace,
-                                            rising,
-                                            &self.shown,
-                                        );
+                                        commands.push(Command::Trigger {
+                                            trace: Some(name.clone()),
+                                            edge,
+                                            level: None,
+                                        });
                                         ui.close();
                                     }
                                 }
@@ -487,38 +412,55 @@ impl eframe::App for Scope {
         });
         egui::Panel::left("traces").show(ui, |ui| {
             ui.heading("Traces");
-            for (index, (name, shown)) in
-                self.names.iter().zip(&mut self.shown).enumerate()
+            for (index, (name, &shown)) in self
+                .model
+                .names()
+                .iter()
+                .zip(self.model.shown())
+                .enumerate()
             {
-                ui.checkbox(
-                    shown,
-                    egui::RichText::new(name).color(plot::color(index)),
-                );
+                let mut checked = shown;
+                if ui
+                    .checkbox(
+                        &mut checked,
+                        egui::RichText::new(name).color(plot::color(index)),
+                    )
+                    .changed()
+                {
+                    commands.push(Command::Show {
+                        trace: name.clone(),
+                        shown: checked,
+                    });
+                }
             }
         });
+        for command in commands {
+            self.run(&ctx, command);
+        }
         egui::Panel::bottom("status").show(ui, |ui| {
-            let view = self.alternate.as_ref().unwrap_or(&self.view);
-            let mut status = format!("{}: {}", self.file, view.status());
+            let mut status = format!(
+                "{}: {}",
+                self.model.file(),
+                self.model.active().status()
+            );
+            if let Some(trigger) = self.model.primary().trigger_line() {
+                status = format!("{status}; {trigger}");
+            }
             if let Some(message) = &self.message {
                 status = format!("{status}; {message}");
-            }
-            if let Some(trigger) = self.view.trigger_line() {
-                status = format!("{status}; {trigger}");
             }
             ui.label(status);
         });
         egui::CentralPanel::default().show(ui, |ui| {
-            match &mut self.alternate {
-                Some(view) => view.show(ui, &self.shown),
-                None => self.view.show(ui, &self.shown),
-            }
+            let (view, shown) = self.model.active_mut();
+            view.show(ui, shown);
         });
         if let Some(dialog) = &mut self.dialog
             && let Some(choice) = dialog.show(&ctx)
         {
             self.dialog = None;
             if let Choice::Save { path, format } = choice {
-                self.save(&ctx, path, format);
+                self.run(&ctx, Command::Save { format, path });
             }
         }
     }

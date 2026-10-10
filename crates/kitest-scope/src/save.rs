@@ -6,22 +6,13 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, ColorImage};
 
-/// What a save writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    /// The window as an image.
-    Png,
-    /// The shown traces over the measurement window, as comma-separated values.
-    Csv,
-}
+pub use crate::control::Format;
 
-impl Format {
-    /// The file extension, without the dot.
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Png => "png",
-            Self::Csv => "csv",
-        }
+/// The file extension of `format`, without the dot.
+fn extension(format: Format) -> &'static str {
+    match format {
+        Format::Png => "png",
+        Format::Csv => "csv",
     }
 }
 
@@ -44,7 +35,7 @@ impl Dialog {
     pub fn new(capture: &Path, format: Format) -> Self {
         Self {
             path: capture
-                .with_extension(format.extension())
+                .with_extension(extension(format))
                 .display()
                 .to_string(),
             format,
@@ -59,7 +50,7 @@ impl Dialog {
             ui.horizontal(|ui| {
                 for (format, label) in [(Format::Png, "PNG of the window"), (Format::Csv, "CSV of the shown traces")] {
                     if ui.radio_value(&mut self.format, format, label).changed() {
-                        self.path = Path::new(&self.path).with_extension(format.extension()).display().to_string();
+                        self.path = Path::new(&self.path).with_extension(extension(format)).display().to_string();
                     }
                 }
             });

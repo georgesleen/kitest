@@ -160,6 +160,9 @@ Done:
   phase margin, and group delay.
 - An optional trace, level, and edge trigger that aligns re-runs to time
   zero.
+- A JSON-RPC command protocol on the live window's socket, behind every
+  menu action, with `kitest-scope ctl` for the live window and
+  `kitest-scope query` for a capture file without one. See `scope.md`.
 
 One window, live:
 - Tabs and side-by-side splits beside the stacked panes, through
@@ -171,9 +174,8 @@ Instruments:
 - Oscilloscope: overshoot against the test's target.
 - Filters: `lowpass()` and `highpass()` checks driven from an input net,
   drawn on the Bode view.
-- Control: a JSON command protocol on the live window's socket, and
-  measurements from a capture file without a window, so a script or an
-  agent can drive and read the scope.
+- Control: an MCP server over the command protocol, so an agent calls the
+  scope as tools.
 - VNA: Smith and polar charts once a port or impedance probe exists.
 
 ## Reference design

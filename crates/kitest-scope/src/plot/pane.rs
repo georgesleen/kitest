@@ -43,7 +43,7 @@ pub(super) struct Pane {
     pub channels: Vec<usize>,
     pub quantity: Quantity,
     pub measurements: Vec<Measurement>,
-    y: Window,
+    pub y: Window,
     box_start: Option<PlotPoint>,
 }
 
