@@ -29,13 +29,26 @@ pub(super) struct Shared<'v> {
     pub horizontal_markers: &'v [(usize, f64, String)],
 }
 
-/// A change a pane asks its view to make.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A change a pane asks its view to make, in plot coordinates.
+#[derive(Debug, Clone, PartialEq)]
 pub(super) enum Action {
     /// Fit every pane to its shown channels.
     Fit,
     /// Move `channel` into pane `to`, or into a new pane if `to` is `None`.
     Move { channel: usize, to: Option<usize> },
+    /// Set what pane `pane` measures.
+    Measurements {
+        pane: usize,
+        measurements: Vec<Measurement>,
+    },
+    /// Show `x` on the shared x axis and `y` on pane `pane`.
+    Zoom {
+        pane: usize,
+        x: [f64; 2],
+        y: [f64; 2],
+    },
+    /// Place cursors A and B, removing any that is `None`.
+    Cursors { a: Option<f64>, b: Option<f64> },
 }
 
 /// One plot: the channels in it, its y window, and what it measures.
@@ -130,7 +143,7 @@ impl Pane {
         ui: &mut egui::Ui,
         index: usize,
         height: f32,
-        link: &mut Link,
+        link: &Link,
         shared: &Shared<'_>,
     ) -> (Option<f64>, Vec<Action>) {
         let (x, y) = (link.quantity, self.quantity);
@@ -197,22 +210,24 @@ impl Pane {
 
         let mut actions = Vec::new();
         let response = plot.show(ui, |plot_ui| {
-            if self.navigate(plot_ui, link) {
-                actions.push(Action::Fit);
-            }
+            self.navigate(plot_ui, index, link, &mut actions);
             plot_ui.set_plot_bounds_x(link.x.range());
             plot_ui.set_plot_bounds_y(self.y.range());
-            for reference in shared.reference.iter().filter(|reference| {
-                self.channels.iter().any(|&index| {
-                    let current = &shared.channels[index];
-                    current.name == reference.name
-                        && current.quantity == reference.quantity
-                }) && shared
-                    .shown
-                    .get(reference.trace)
-                    .copied()
-                    .unwrap_or(false)
-            }) {
+            for (reference, trace) in
+                shared.reference.iter().filter_map(|reference| {
+                    self.channels.iter().find_map(|&index| {
+                        let current = &shared.channels[index];
+                        (current.name == reference.name
+                            && current.quantity == reference.quantity
+                            && shared
+                                .shown
+                                .get(current.trace)
+                                .copied()
+                                .unwrap_or(false))
+                        .then_some((reference, current.trace))
+                    })
+                })
+            {
                 let points = decimate::visible(
                     &reference.points,
                     link.x.range(),
@@ -220,7 +235,7 @@ impl Pane {
                 );
                 plot_ui.line(
                     Line::new("", points)
-                        .color(color(reference.trace).gamma_multiply(0.28))
+                        .color(color(trace).gamma_multiply(0.28))
                         .width(1.0),
                 );
             }
@@ -437,12 +452,18 @@ impl Pane {
         (hovered, actions)
     }
 
-    /// Applies the pointer's scroll, drag, keys, and double-click to `link`
-    /// and the pane, and returns whether a double-click asks for a fit.
+    /// Turns the pointer's scroll, drag, keys, and double-click into actions.
     ///
     /// Scroll zooms x and Ctrl+scroll zooms y. A middle drag or a Ctrl+left
-    /// drag pans, a right drag zooms to a box, and A or B places a cursor.
-    fn navigate(&mut self, plot_ui: &mut PlotUi<'_>, link: &mut Link) -> bool {
+    /// drag pans, a right drag zooms to a box, A or B places a cursor, and a
+    /// double-click fits.
+    fn navigate(
+        &mut self,
+        plot_ui: &mut PlotUi<'_>,
+        index: usize,
+        link: &Link,
+        actions: &mut Vec<Action>,
+    ) {
         let response = plot_ui.response().clone();
         let pointer = plot_ui.pointer_coordinate();
         let (scroll, zoom, command, press, key_a, key_b) =
@@ -456,25 +477,25 @@ impl Pane {
                     input.key_pressed(egui::Key::B),
                 )
             });
+        let (mut x, mut y) = (link.x, self.y);
         if let Some(pointer) = pointer
             && response.hovered()
         {
-            link.x
-                .zoom((f64::from(scroll) * ZOOM_PER_POINT).exp(), pointer.x);
-            self.y.zoom(f64::from(zoom), pointer.y);
-            if key_a {
-                link.a = Some(pointer.x);
-            }
-            if key_b {
-                link.b = Some(pointer.x);
+            x.zoom((f64::from(scroll) * ZOOM_PER_POINT).exp(), pointer.x);
+            y.zoom(f64::from(zoom), pointer.y);
+            if key_a || key_b {
+                actions.push(Action::Cursors {
+                    a: if key_a { Some(pointer.x) } else { link.a },
+                    b: if key_b { Some(pointer.x) } else { link.b },
+                });
             }
         }
         if response.dragged_by(PointerButton::Middle)
             || (response.dragged_by(PointerButton::Primary) && command)
         {
             let delta = plot_ui.pointer_coordinate_drag_delta();
-            link.x.pan(-f64::from(delta.x));
-            self.y.pan(-f64::from(delta.y));
+            x.pan(-f64::from(delta.x));
+            y.pan(-f64::from(delta.y));
         }
         if response.drag_started_by(PointerButton::Secondary)
             && let Some(press) = press
@@ -484,10 +505,22 @@ impl Pane {
         if response.drag_stopped_by(PointerButton::Secondary)
             && let (Some(start), Some(end)) = (self.box_start.take(), pointer)
         {
-            link.x.zoom_to(start.x, end.x);
-            self.y.zoom_to(start.y, end.y);
+            x.zoom_to(start.x, end.x);
+            y.zoom_to(start.y, end.y);
         }
-        response.double_clicked()
+        if x != link.x || y != self.y {
+            let ends = |window: Window| {
+                [*window.range().start(), *window.range().end()]
+            };
+            actions.push(Action::Zoom {
+                pane: index,
+                x: ends(x),
+                y: ends(y),
+            });
+        }
+        if response.double_clicked() {
+            actions.push(Action::Fit);
+        }
     }
 
     /// Shows each shown channel's value at `at` in a box beside `anchor`.
@@ -571,11 +604,16 @@ impl Pane {
             for &measurement in self.quantity.measurements {
                 let mut on = self.measurements.contains(&measurement);
                 if ui.checkbox(&mut on, measurement.label()).changed() {
+                    let mut measurements = self.measurements.clone();
                     if on {
-                        self.measurements.push(measurement);
+                        measurements.push(measurement);
                     } else {
-                        self.measurements.retain(|&other| other != measurement);
+                        measurements.retain(|&other| other != measurement);
                     }
+                    actions.push(Action::Measurements {
+                        pane: index,
+                        measurements,
+                    });
                 }
             }
         });

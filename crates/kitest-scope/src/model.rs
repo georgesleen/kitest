@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use kitest_scope::{AcTrace, Capture, Data, FileError, Trace};
+use kitest_scope::{Capture, Data, FileError};
 use serde_json::{Value as Json, json};
 
 use crate::control::{Command, Edge, Error, Format, ViewName};
@@ -30,7 +30,7 @@ impl Model {
     /// When the capture cannot be read.
     pub fn load(path: &Path) -> Result<Self, FileError> {
         let capture = Capture::load(path)?;
-        let (names, view) = capture_view(&capture);
+        let (names, view) = family_view(std::slice::from_ref(&capture));
         let mut model = Self {
             path: path.to_path_buf(),
             capture_name: capture.name.clone(),
@@ -103,10 +103,10 @@ impl Model {
     /// The instruments the capture can be shown in.
     pub fn views(&self) -> Vec<ViewName> {
         let mut views = vec![ViewName::Primary];
-        if self.view.spectrum(&self.shown).is_some() {
+        if self.view.can_trigger() {
             views.push(ViewName::Spectrum);
         }
-        if self.view.group_delay(&self.shown).is_some() {
+        if self.view.can_reference() {
             views.push(ViewName::GroupDelay);
         }
         views
@@ -129,7 +129,6 @@ impl Model {
             Command::Show { trace, shown } => {
                 let index = self.trace(&trace)?;
                 self.shown[index] = shown;
-                self.rederive();
             }
             Command::Zoom { x, y, pane } => {
                 let (view, _) = self.active_mut();
@@ -265,7 +264,9 @@ impl Model {
         let capture = Capture::load(path).map_err(|error| {
             Error::failed(format!("{}: {error}", path.display()))
         })?;
-        let same = capture.name == self.capture_name;
+        let same = capture.name == self.capture_name
+            && std::mem::discriminant(&capture.data)
+                == std::mem::discriminant(&self.family[0].data);
         if same {
             match self
                 .family
@@ -278,8 +279,7 @@ impl Model {
         } else {
             self.family = vec![capture];
         }
-        let capture = family_capture(&self.family);
-        let (names, view) = capture_view(&capture);
+        let (names, view) = family_view(&self.family);
         let shown: Vec<bool> = names
             .iter()
             .map(|name| {
@@ -298,18 +298,24 @@ impl Model {
         }
         self.modified = modified(path);
         self.path = path.to_path_buf();
-        self.capture_name = capture.name.clone();
+        self.capture_name = self.family[0].name.clone();
         self.shown = shown;
         self.names = names;
-        self.derived = None;
+        if !same {
+            self.derived = None;
+        }
         let name = if same {
             name
-        } else if initial_spectrum(&capture) {
+        } else if initial_spectrum(&self.family[0]) {
             ViewName::Spectrum
         } else {
             ViewName::Primary
         };
-        let _ = self.set_view(name);
+        if same && self.derived.is_some() {
+            self.rederive();
+        } else {
+            let _ = self.set_view(name);
+        }
         Ok(())
     }
 
@@ -323,12 +329,12 @@ impl Model {
             ViewName::Primary => None,
             ViewName::Spectrum => {
                 Some(self.view.spectrum(&self.shown).ok_or_else(|| {
-                    Error::failed("only a transient capture has a spectrum")
+                    Error::failed("a spectrum needs a transient capture with a shown trace")
                 })?)
             }
             ViewName::GroupDelay => {
                 Some(self.view.group_delay(&self.shown).ok_or_else(|| {
-                    Error::failed("only an AC sweep has a group delay")
+                    Error::failed("a group delay needs an AC sweep with a shown trace")
                 })?)
             }
         };
@@ -338,10 +344,18 @@ impl Model {
 
     /// Rebuilds the derived view after the primary one or the shown traces changed.
     fn rederive(&mut self) {
-        if let Some((name, _)) = self.derived {
-            let _ = self
-                .set_view(name)
-                .or_else(|_| self.set_view(ViewName::Primary));
+        let Some((name, old)) = &mut self.derived else {
+            return;
+        };
+        let next = match name {
+            ViewName::Spectrum => self.view.spectrum(&self.shown),
+            ViewName::GroupDelay => self.view.group_delay(&self.shown),
+            ViewName::Primary => None,
+        };
+        if let Some(next) = next {
+            old.replace(next, &self.shown, false);
+        } else {
+            self.derived = None;
         }
     }
 
@@ -373,87 +387,30 @@ fn capture_view(capture: &Capture) -> (Vec<String>, plot::View) {
     }
 }
 
-/// Captures of the same name as one capture, with each corner appended to its
-/// trace names.
-fn family_capture(captures: &[Capture]) -> Capture {
-    let first = captures
-        .first()
-        .expect("a scope family always has a capture");
-    if captures.len() == 1 {
-        return first.clone();
-    }
-    let suffix = |capture: &Capture| {
-        capture
+/// Builds each run independently, preserving its sampling grid.
+fn family_view(captures: &[Capture]) -> (Vec<String>, plot::View) {
+    let mut names = Vec::new();
+    let mut combined: Option<plot::View> = None;
+    for (run, capture) in captures.iter().enumerate() {
+        let (run_names, mut view) = capture_view(capture);
+        let suffix = capture
             .corner
             .as_deref()
-            .map_or_else(String::new, |corner| format!(" [{corner}]"))
-    };
-    let mut expectations = Vec::new();
-    let data = match &first.data {
-        Data::Transient { time, .. } => {
-            let mut traces = Vec::new();
-            for capture in captures {
-                let Data::Transient {
-                    traces: capture_traces,
-                    ..
-                } = &capture.data
-                else {
-                    continue;
-                };
-                let suffix = suffix(capture);
-                traces.extend(capture_traces.iter().map(|trace| Trace {
-                    name: format!("{}{suffix}", trace.name),
-                    values: trace.values.clone(),
-                }));
-                expectations.extend(capture.expectations.iter().cloned().map(
-                    |mut expectation| {
-                        expectation.trace =
-                            format!("{}{suffix}", expectation.trace);
-                        expectation
-                    },
-                ));
-            }
-            Data::Transient {
-                time: time.clone(),
-                traces,
-            }
+            .map_or_else(String::new, |corner| format!(" [{corner}]"));
+        view.name_run(run, names.len(), &suffix);
+        names.extend(
+            run_names.into_iter().map(|name| format!("{name}{suffix}")),
+        );
+        if let Some(combined) = &mut combined {
+            combined.append(view);
+        } else {
+            combined = Some(view);
         }
-        Data::Ac { frequency, .. } => {
-            let mut traces = Vec::new();
-            for capture in captures {
-                let Data::Ac {
-                    traces: capture_traces,
-                    ..
-                } = &capture.data
-                else {
-                    continue;
-                };
-                let suffix = suffix(capture);
-                traces.extend(capture_traces.iter().map(|trace| AcTrace {
-                    name: format!("{}{suffix}", trace.name),
-                    re: trace.re.clone(),
-                    im: trace.im.clone(),
-                }));
-                expectations.extend(capture.expectations.iter().cloned().map(
-                    |mut expectation| {
-                        expectation.trace =
-                            format!("{}{suffix}", expectation.trace);
-                        expectation
-                    },
-                ));
-            }
-            Data::Ac {
-                frequency: frequency.clone(),
-                traces,
-            }
-        }
-    };
-    Capture {
-        name: first.name.clone(),
-        corner: None,
-        data,
-        expectations,
     }
+    (
+        names,
+        combined.expect("a scope family always has a capture"),
+    )
 }
 
 /// Whether a capture opens on its spectrum: when every expectation lies on a
@@ -629,5 +586,241 @@ mod tests {
             .unwrap();
         assert_eq!(state["view"], "primary");
         assert_eq!(state["plot"]["x"]["quantity"], "time");
+    }
+
+    #[test]
+    fn regression_family_preserves_each_grid_and_trigger() {
+        let directory = tempfile::tempdir().unwrap();
+        let save = |corner: &str, time: Vec<f64>| {
+            let mut capture = Capture::new(
+                "family",
+                Data::Transient {
+                    traces: vec![Trace {
+                        name: "out".into(),
+                        values: vec![0.0, 1.0, 0.0, 1.0][..time.len()].to_vec(),
+                    }],
+                    time,
+                },
+            );
+            capture.corner = Some(corner.into());
+            capture.expectations = vec![Expectation {
+                trace: "out".into(),
+                passed: true,
+                message: "band".into(),
+                region: Region::Band {
+                    start: 0.0,
+                    end: 1.0,
+                    low: 0.0,
+                    high: 1.0,
+                },
+            }];
+            let path = directory.path().join(capture.file_name());
+            capture.save(&path).unwrap();
+            path
+        };
+        let a = save("a", vec![0.0, 1.0, 2.0, 3.0]);
+        let b = save("b", vec![0.0, 2.0, 4.0]);
+        let mut model = Model::load(&a).unwrap();
+        model.open(&b).unwrap();
+        let readings = model
+            .apply(Command::Measure {
+                trace: "out [b]".into(),
+                quantity: None,
+                measurements: vec![Measurement::Max],
+                over: Some([0.0, 4.0]),
+            })
+            .unwrap();
+        assert_eq!(readings["max"]["value"], 1.0);
+        model
+            .apply(Command::Trigger {
+                trace: Some("out [a]".into()),
+                edge: Edge::Rising,
+                level: Some(0.5),
+            })
+            .unwrap();
+        let expectations = model.state()["plot"]["expectations"].clone();
+        assert_eq!(expectations[0]["region"]["start"], -0.5);
+        assert_eq!(expectations[1]["region"]["start"], -1.0);
+        let csv = model.primary().csv(model.shown());
+        assert!(csv.contains("0.5,1,0.75\n"), "{csv}");
+        model
+            .apply(Command::Trigger {
+                trace: None,
+                edge: Edge::Rising,
+                level: None,
+            })
+            .unwrap();
+        assert_eq!(
+            model.state()["plot"]["expectations"][1]["region"]["start"],
+            0.0
+        );
+    }
+
+    #[test]
+    fn regression_derived_hide_and_reload_preserve_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = capture(directory.path(), Vec::new());
+        let mut model = Model::load(&path).unwrap();
+        model.set_view(ViewName::Spectrum).unwrap();
+        model
+            .apply(Command::Move {
+                trace: "inv".into(),
+                quantity: None,
+                to: None,
+            })
+            .unwrap();
+        model
+            .apply(Command::Zoom {
+                x: Some([500.0, 2000.0]),
+                y: Some([-80.0, 10.0]),
+                pane: 0,
+            })
+            .unwrap();
+        model
+            .apply(Command::Cursors {
+                a: Some(1000.0),
+                b: Some(1500.0),
+            })
+            .unwrap();
+        model
+            .apply(Command::Measurements {
+                pane: 0,
+                measurements: vec![Measurement::Max],
+            })
+            .unwrap();
+        let before = model.state()["plot"].clone();
+        model
+            .apply(Command::Show {
+                trace: "inv".into(),
+                shown: false,
+            })
+            .unwrap();
+        assert_eq!(model.state()["plot"]["cursors"], before["cursors"]);
+        model.open(&path).unwrap();
+        model
+            .apply(Command::Show {
+                trace: "inv".into(),
+                shown: true,
+            })
+            .unwrap();
+        let after = model.state()["plot"].clone();
+        assert_eq!(after["x"], before["x"]);
+        assert_eq!(after["panes"], before["panes"]);
+        assert_eq!(after["cursors"], before["cursors"]);
+    }
+
+    #[test]
+    fn regression_ac_family_preserves_independent_grids() {
+        let make = |corner: &str, frequency: Vec<f64>| {
+            let mut capture = Capture::new(
+                "ac-family",
+                Data::Ac {
+                    traces: vec![kitest_scope::AcTrace {
+                        name: "out".into(),
+                        re: vec![2.0; frequency.len()],
+                        im: vec![0.0; frequency.len()],
+                    }],
+                    frequency,
+                },
+            );
+            capture.corner = Some(corner.into());
+            capture
+        };
+        let captures = [
+            make("a", vec![10.0, 100.0, 1000.0]),
+            make("b", vec![1.0, 10.0, 100.0, 1000.0, 10000.0]),
+        ];
+        let (names, view) = super::family_view(&captures);
+        assert_eq!(names, ["out [a]", "out [b]"]);
+        let csv = view.csv(&[true; 2]);
+        assert_eq!(csv.lines().count(), 6);
+        let first: Vec<_> = csv.lines().nth(1).unwrap().split(',').collect();
+        assert_eq!(first[0], "1");
+        assert_eq!(first[1], "");
+        assert_eq!(first[3], "");
+        let delay = view.group_delay(&[true; 2]).unwrap();
+        assert!(
+            delay
+                .measure(
+                    "out [b]",
+                    None,
+                    &[Measurement::Min],
+                    Some([1.0, 10000.0])
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn regression_spectrum_command_ignores_unavailable_hidden_corner() {
+        let directory = tempfile::tempdir().unwrap();
+        let save = |corner: &str, time: Vec<f64>, values: Vec<f64>| {
+            let mut capture = Capture::new(
+                "family",
+                Data::Transient {
+                    time,
+                    traces: vec![Trace {
+                        name: "out".into(),
+                        values,
+                    }],
+                },
+            );
+            capture.corner = Some(corner.into());
+            let path = directory.path().join(capture.file_name());
+            capture.save(&path).unwrap();
+            path
+        };
+        let long =
+            save("long", vec![0.0, 1.0, 2.0, 3.0], vec![0.0, 1.0, 0.0, 1.0]);
+        let short = save("short", vec![0.0, 1.0], vec![0.0, 1.0]);
+        let mut model = Model::load(&long).unwrap();
+        model.open(&short).unwrap();
+        model
+            .apply(Command::Show {
+                trace: "out [short]".into(),
+                shown: false,
+            })
+            .unwrap();
+        model
+            .apply(Command::Zoom {
+                x: Some([2.0, 3.0]),
+                y: None,
+                pane: 0,
+            })
+            .unwrap();
+        model
+            .apply(Command::View {
+                name: ViewName::Spectrum,
+            })
+            .unwrap();
+        assert_eq!(
+            model.state()["plot"]["panes"][0]["channels"],
+            serde_json::json!(["out [long]"])
+        );
+        model
+            .apply(Command::Cursors {
+                a: Some(10.0),
+                b: Some(20.0),
+            })
+            .unwrap();
+        let before = model.state()["plot"]["cursors"].clone();
+        model
+            .apply(Command::Trigger {
+                trace: Some("out [long]".into()),
+                edge: Edge::Rising,
+                level: Some(0.5),
+            })
+            .unwrap();
+        assert_eq!(model.state()["plot"]["cursors"], before);
+        model
+            .apply(Command::Show {
+                trace: "out [short]".into(),
+                shown: true,
+            })
+            .unwrap();
+        assert_eq!(
+            model.state()["plot"]["panes"][0]["channels"],
+            serde_json::json!(["out [long]", "out [short]"])
+        );
     }
 }

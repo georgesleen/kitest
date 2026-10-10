@@ -54,6 +54,10 @@ pub const MAGNITUDE: &[Measurement] =
 /// What a phase over frequency can be measured for.
 pub const PHASE: &[Measurement] = &[Measurement::Max, Measurement::Min];
 
+/// What group delay over frequency can be measured for.
+pub const GROUP_DELAY: &[Measurement] =
+    &[Measurement::Min, Measurement::Max, Measurement::PeakToPeak];
+
 impl Measurement {
     /// The measurement's short name.
     pub fn label(self) -> &'static str {

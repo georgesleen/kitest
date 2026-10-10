@@ -1797,6 +1797,7 @@ dependencies = [
  "eframe",
  "egui_plot",
  "kitest-measure",
+ "libc",
  "png",
  "serde",
  "serde_json",

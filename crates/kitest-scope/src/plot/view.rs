@@ -11,11 +11,12 @@ use super::measure::{Measurement, Value};
 use super::pane::{Action, Pane, Shared};
 use super::window::{Window, X_GRID_LINES};
 use super::{Channel, Quantity, Unit};
+use crate::control::Command;
 
 /// A trace, level, and edge that align each run to time zero.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Trigger {
-    trace: usize,
+    identity: String,
     level: f64,
     rising: bool,
 }
@@ -50,16 +51,18 @@ pub struct View {
     reference: Vec<Channel>,
     panes: Vec<Pane>,
     expectations: Vec<kitest_scope::Expectation>,
+    source_expectations: Vec<kitest_scope::Expectation>,
     fixed_markers: Vec<(usize, f64, String)>,
     horizontal_markers: Vec<(usize, f64, String)>,
     reference_trace: Option<usize>,
+    reference_basis: Option<String>,
     annotations: Vec<String>,
     trigger: Option<Trigger>,
 }
 impl View {
     /// A view of `channels` over `x`, one pane per group of channel indices.
     ///
-    /// The channels share their x samples, and each group's channels share a quantity.
+    /// Each group's channels share a quantity.
     pub(super) fn new(
         kind: &'static str,
         x: Quantity,
@@ -94,12 +97,58 @@ impl View {
             reference: Vec::new(),
             panes,
             expectations: expectations.to_vec(),
+            source_expectations: expectations.to_vec(),
             fixed_markers: Vec::new(),
             horizontal_markers: Vec::new(),
             reference_trace: None,
+            reference_basis: None,
             annotations: Vec::new(),
             trigger: None,
         }
+    }
+
+    /// Names one run's channels without changing their source identity or grid.
+    pub fn name_run(&mut self, run: usize, trace_offset: usize, suffix: &str) {
+        for channel in &mut self.channels {
+            channel.run = run;
+            channel.trace += trace_offset;
+            channel.name.push_str(suffix);
+        }
+        for expectation in &mut self.expectations {
+            expectation.trace.push_str(suffix);
+        }
+        self.source_expectations.clone_from(&self.expectations);
+    }
+
+    /// Appends an independently sampled run to compatible panes.
+    pub fn append(&mut self, mut run: Self) {
+        assert_eq!(self.kind, run.kind);
+        let offset = self.channels.len();
+        self.channels.append(&mut run.channels);
+        let shown =
+            vec![
+                true;
+                self.channels.iter().map(|c| c.trace + 1).max().unwrap_or(0)
+            ];
+        for pane in run.panes {
+            let indices = pane.channels.iter().map(|index| index + offset);
+            if let Some(existing) = self
+                .panes
+                .iter_mut()
+                .find(|existing| existing.quantity == pane.quantity)
+            {
+                existing.channels.extend(indices);
+            } else {
+                self.panes.push(Pane::new(
+                    indices.collect(),
+                    &self.channels,
+                    &shown,
+                ));
+            }
+        }
+        self.expectations.append(&mut run.expectations);
+        self.source_expectations.clone_from(&self.expectations);
+        self.fit(&shown);
     }
 
     /// Replaces the channels with `next`, keeping layout, cursors, and zoom
@@ -109,8 +158,25 @@ impl View {
             *self = next;
             return;
         }
-        next.reference = std::mem::take(&mut self.channels);
-        next.trigger = self.trigger;
+        let selected = self
+            .reference_trace
+            .and_then(|trace| self.channels.iter().find(|c| c.trace == trace))
+            .map(|c| c.name.clone());
+        if let Some(name) = selected {
+            let trace = next
+                .channels
+                .iter()
+                .find(|c| c.name == name)
+                .map(|c| c.trace);
+            next.set_reference(trace, shown);
+            if trace.is_none() {
+                for channel in &mut self.channels {
+                    channel.display(channel.source_y.clone());
+                }
+            }
+        }
+        let old_channels = std::mem::take(&mut self.channels);
+        next.trigger = self.trigger.clone();
         next.apply_trigger(refit);
         next.link.a = self.link.a;
         next.link.b = self.link.b;
@@ -125,7 +191,7 @@ impl View {
                 .channels
                 .iter()
                 .filter_map(|&index| {
-                    let channel = &next.reference[index];
+                    let channel = &old_channels[index];
                     next.channels.iter().position(|candidate| {
                         candidate.name == channel.name
                             && candidate.quantity == channel.quantity
@@ -138,15 +204,29 @@ impl View {
                 panes.push(pane);
             }
         }
-        if !panes.is_empty() {
-            next.panes = panes;
+        for index in 0..next.channels.len() {
+            if panes.iter().any(|pane| pane.channels.contains(&index)) {
+                continue;
+            }
+            let quantity = next.channels[index].quantity;
+            if let Some(pane) =
+                panes.iter_mut().find(|pane| pane.quantity == quantity)
+            {
+                pane.channels.push(index);
+            } else {
+                panes.push(Pane::new(vec![index], &next.channels, shown));
+            }
+        }
+        next.panes = panes;
+        if self.reference_basis == next.reference_basis {
+            next.reference = old_channels;
         }
         *self = next;
     }
 
-    /// A spectrum view of this transient view's shown channels over the
-    /// visible time window, or `None` for another kind of view.
-    pub fn spectrum(&self, shown: &[bool]) -> Option<Self> {
+    /// A spectrum view of every transient channel over the visible time window,
+    /// or `None` for another kind of view.
+    pub fn spectrum(&self, _shown: &[bool]) -> Option<Self> {
         if self.kind != "transient" {
             return None;
         }
@@ -166,9 +246,7 @@ impl View {
         let mut channels = Vec::new();
         let mut markers = Vec::new();
         let mut horizontal_markers = Vec::new();
-        for channel in self.channels.iter().filter(|channel| {
-            shown.get(channel.trace).copied().unwrap_or(false)
-        }) {
+        for channel in &self.channels {
             let samples = channel
                 .x
                 .iter()
@@ -176,7 +254,11 @@ impl View {
                 .count()
                 .next_power_of_two()
                 .clamp(256, 65_536);
-            let spectrum = channel.curve().spectrum(over.clone(), samples)?;
+            let Some(spectrum) =
+                channel.curve().spectrum(over.clone(), samples)
+            else {
+                continue;
+            };
             let bin_width = spectrum.bin_width();
             let x: Vec<f64> = (1..spectrum.amplitudes().len())
                 .map(|bin| (bin as f64 * bin_width).log10())
@@ -266,8 +348,13 @@ impl View {
         rising: bool,
         shown: &[bool],
     ) {
+        let Some(channel) =
+            self.channels.iter().find(|channel| channel.trace == trace)
+        else {
+            return;
+        };
         self.trigger = Some(Trigger {
-            trace,
+            identity: channel.identity.clone(),
             level,
             rising,
         });
@@ -280,6 +367,7 @@ impl View {
     /// Clears the trigger and restores the capture's absolute time axis.
     pub fn clear_trigger(&mut self, shown: &[bool]) {
         self.trigger = None;
+        self.expectations.clone_from(&self.source_expectations);
         for channel in &mut self.channels {
             channel.shift_x(0.0);
         }
@@ -289,11 +377,11 @@ impl View {
 
     /// The trigger as a short status line.
     pub fn trigger_line(&self) -> Option<String> {
-        let trigger = self.trigger?;
+        let trigger = self.trigger.as_ref()?;
         let channel = self
             .channels
             .iter()
-            .find(|channel| channel.trace == trigger.trace)?;
+            .find(|channel| channel.identity == trigger.identity)?;
         Some(format!(
             "trigger {} {} through {}",
             channel.name,
@@ -306,30 +394,52 @@ impl View {
 
     /// Applies the trigger to the current channels.
     fn apply_trigger(&mut self, refit: bool) {
-        let Some(trigger) = self.trigger else { return };
-        let Some(channel) = self
+        let Some(trigger) = self.trigger.as_ref() else {
+            return;
+        };
+        let mut offsets = BTreeMap::new();
+        for channel in self
             .channels
             .iter()
-            .find(|channel| channel.trace == trigger.trace)
-        else {
-            return;
-        };
-        let Some((&first, &last)) =
-            channel.source_x.first().zip(channel.source_x.last())
-        else {
-            return;
-        };
-        let curve =
-            kitest_measure::Curve::new(&channel.source_x, &channel.source_y);
-        let Some(crossing) = curve
-            .crossings(trigger.level, first..=last)
-            .into_iter()
-            .find(|crossing| crossing.rising == trigger.rising)
-        else {
-            return;
-        };
+            .filter(|channel| channel.identity == trigger.identity)
+        {
+            let Some((&first, &last)) =
+                channel.source_x.first().zip(channel.source_x.last())
+            else {
+                continue;
+            };
+            let curve = kitest_measure::Curve::new(
+                &channel.source_x,
+                &channel.source_y,
+            );
+            if let Some(crossing) = curve
+                .crossings(trigger.level, first..=last)
+                .into_iter()
+                .find(|crossing| crossing.rising == trigger.rising)
+            {
+                offsets.insert(channel.run, crossing.x);
+            }
+        }
         for channel in &mut self.channels {
-            channel.shift_x(crossing.x);
+            channel.shift_x(offsets.get(&channel.run).copied().unwrap_or(0.0));
+        }
+        self.expectations.clone_from(&self.source_expectations);
+        for expectation in &mut self.expectations {
+            let offset = self
+                .channels
+                .iter()
+                .find(|channel| channel.name == expectation.trace)
+                .and_then(|channel| offsets.get(&channel.run))
+                .copied()
+                .unwrap_or(0.0);
+            match &mut expectation.region {
+                kitest_scope::Region::Band { start, end, .. }
+                | kitest_scope::Region::Swing { start, end, .. } => {
+                    *start -= offset;
+                    *end -= offset;
+                }
+                _ => {}
+            }
         }
         if refit {
             let shown = vec![
@@ -369,7 +479,9 @@ impl View {
                         channel.trace == trace
                             && channel.quantity.name == quantity
                     })
-                    .map(|channel| channel.source_y.clone())
+                    .map(|channel| {
+                        (channel.source_x.clone(), channel.source_y.clone())
+                    })
             });
             for channel in self
                 .channels
@@ -377,12 +489,17 @@ impl View {
                 .filter(|channel| channel.quantity.name == quantity)
             {
                 let y = match &reference {
-                    Some(reference) => channel
-                        .source_y
-                        .iter()
-                        .zip(reference)
-                        .map(|(value, reference)| value - reference)
-                        .collect(),
+                    Some((x, y)) => {
+                        let reference = kitest_measure::Curve::new(x, y);
+                        channel
+                            .source_x
+                            .iter()
+                            .zip(&channel.source_y)
+                            .map(|(&at, value)| {
+                                value - reference.at(at).unwrap_or(f64::NAN)
+                            })
+                            .collect()
+                    }
                     None => channel.source_y.clone(),
                 };
                 channel.display(y);
@@ -395,9 +512,8 @@ impl View {
         }
     }
 
-    /// A group-delay view of every shown phase response, or `None` for a
-    /// non-Bode view.
-    pub fn group_delay(&self, shown: &[bool]) -> Option<Self> {
+    /// A group-delay view of every phase response, or `None` for a non-Bode view.
+    pub fn group_delay(&self, _shown: &[bool]) -> Option<Self> {
         if self.kind != "AC sweep" {
             return None;
         }
@@ -405,13 +521,14 @@ impl View {
             name: "group delay",
             unit: Unit::Si("s"),
             log: false,
-            measurements: super::measure::WAVEFORM,
+            measurements: super::measure::GROUP_DELAY,
         };
         let mut channels = Vec::new();
-        for phase in self.channels.iter().filter(|channel| {
-            channel.quantity.name == "phase"
-                && shown.get(channel.trace).copied().unwrap_or(false)
-        }) {
+        for phase in self
+            .channels
+            .iter()
+            .filter(|channel| channel.quantity.name == "phase")
+        {
             let frequency: Vec<f64> =
                 phase.x.iter().map(|x| 10f64.powf(*x)).collect();
             let values = kitest_measure::group_delay(&frequency, &phase.y);
@@ -427,13 +544,20 @@ impl View {
             return None;
         }
         let all = (0..channels.len()).collect();
-        Some(Self::new(
+        let mut view = Self::new(
             "group delay",
             self.link.quantity,
             channels,
             vec![all],
             &[],
-        ))
+        );
+        view.reference_basis = self
+            .reference_trace
+            .and_then(|trace| {
+                self.channels.iter().find(|channel| channel.trace == trace)
+            })
+            .map(|channel| channel.name.clone());
+        Some(view)
     }
 
     /// Recomputes the selected transfer functions' gain and phase margins.
@@ -478,12 +602,14 @@ impl View {
         }
     }
 
-    /// Draws the cursor line and the panes, and applies their interactions.
+    /// Draws the cursor line and the panes, and returns the commands their
+    /// interactions ask for.
     ///
     /// `shown` holds one flag per trace.
-    pub fn show(&mut self, ui: &mut egui::Ui, shown: &[bool]) {
+    pub fn show(&mut self, ui: &mut egui::Ui, shown: &[bool]) -> Vec<Command> {
+        let mut commands = Vec::new();
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            (self.link.a, self.link.b) = (None, None);
+            commands.push(Command::Cursors { a: None, b: None });
         }
         if let Some(line) = self.cursor_line() {
             ui.label(line);
@@ -523,40 +649,58 @@ impl View {
         let mut actions = Vec::new();
         for (index, pane) in self.panes.iter_mut().enumerate() {
             let (hovered, pane_actions) =
-                pane.show(ui, index, height, &mut self.link, &shared);
+                pane.show(ui, index, height, &self.link, &shared);
             hover = hover.or(hovered);
             actions.extend(pane_actions);
         }
         self.link.hover = hover;
-        for action in actions {
-            self.apply(action, shown);
+        commands.extend(actions.into_iter().map(|action| self.command(action)));
+        commands
+    }
+
+    /// The command for one pane's action, in each axis's own unit.
+    fn command(&self, action: Action) -> Command {
+        let x = self.link.quantity;
+        let real = |at: f64| x.value(at);
+        match action {
+            Action::Fit => Command::Fit,
+            Action::Move { channel, to } => {
+                let channel = &self.channels[channel];
+                Command::Move {
+                    trace: channel.name.clone(),
+                    quantity: Some(channel.quantity.name.to_owned()),
+                    to,
+                }
+            }
+            Action::Measurements { pane, measurements } => {
+                Command::Measurements { pane, measurements }
+            }
+            Action::Zoom { pane, x, y } => Command::Zoom {
+                x: Some([real(x[0]), real(x[1])]),
+                y: Some(y),
+                pane,
+            },
+            Action::Cursors { a, b } => Command::Cursors {
+                a: a.map(real),
+                b: b.map(real),
+            },
         }
     }
 
-    /// Applies one pane's request.
-    fn apply(&mut self, action: Action, shown: &[bool]) {
-        match action {
-            Action::Fit => {
-                self.link.x = fit_x(&self.channels, shown);
-                for pane in &mut self.panes {
-                    pane.fit(&self.channels, shown);
-                }
-            }
-            Action::Move { channel, to } => {
-                for pane in &mut self.panes {
-                    pane.channels.retain(|&other| other != channel);
-                }
-                match to.and_then(|to| self.panes.get_mut(to)) {
-                    Some(pane) => pane.channels.push(channel),
-                    None => self.panes.push(Pane::new(
-                        vec![channel],
-                        &self.channels,
-                        shown,
-                    )),
-                }
-                self.panes.retain(|pane| !pane.channels.is_empty());
+    /// Moves channel `channel` into pane `to`, or into a new pane for `None`,
+    /// and drops any pane left empty.
+    fn relocate(&mut self, channel: usize, to: Option<usize>, shown: &[bool]) {
+        for pane in &mut self.panes {
+            pane.channels.retain(|&other| other != channel);
+        }
+        match to.and_then(|to| self.panes.get_mut(to)) {
+            Some(pane) => pane.channels.push(channel),
+            None => {
+                self.panes
+                    .push(Pane::new(vec![channel], &self.channels, shown))
             }
         }
+        self.panes.retain(|pane| !pane.channels.is_empty());
     }
 
     /// Where the -3 dB measurement of each shown channel places a marker.
@@ -661,32 +805,44 @@ impl View {
             .iter()
             .flat_map(|pane| pane.shown_channels(&self.channels, shown))
             .collect();
-        let mut csv = format!("{} ({})", x.name, x.unit.symbol());
+        let mut csv = csv_field(&format!("{} ({})", x.name, x.unit.symbol()));
         for channel in &columns {
-            let _ = write!(
-                csv,
-                ",{} {} ({})",
+            csv.push(',');
+            csv.push_str(&csv_field(&format!(
+                "{} {} ({})",
                 channel.name,
                 channel.quantity.name,
                 channel.quantity.unit.symbol()
-            );
+            )));
         }
         csv.push('\n');
         let over = self.link.over();
-        let samples =
-            self.channels.first().map_or(&[][..], |channel| &channel.x);
-        for (index, &at) in samples
+        let mut samples: Vec<f64> = columns
             .iter()
-            .enumerate()
-            .filter(|(_, at)| over.contains(at))
-        {
+            .flat_map(|channel| channel.x.iter().copied())
+            .filter(|at| over.contains(at))
+            .collect();
+        samples.sort_by(f64::total_cmp);
+        samples.dedup();
+        for at in samples {
             let _ = write!(csv, "{}", x.value(at));
             for channel in &columns {
-                let _ = write!(csv, ",{}", channel.y[index]);
+                csv.push(',');
+                if let Some(value) = channel.curve().at(at) {
+                    let _ = write!(csv, "{value}");
+                }
             }
             csv.push('\n');
         }
         csv
+    }
+}
+
+fn csv_field(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_owned()
     }
 }
 
@@ -821,7 +977,10 @@ impl View {
 
     /// Fits the x axis and every pane to the shown traces.
     pub fn fit(&mut self, shown: &[bool]) {
-        self.apply(Action::Fit, shown);
+        self.link.x = fit_x(&self.channels, shown);
+        for pane in &mut self.panes {
+            pane.fit(&self.channels, shown);
+        }
     }
 
     /// Places cursors A and B in the x axis's unit, removing any that is `None`.
@@ -966,7 +1125,7 @@ impl View {
                 ));
             }
         }
-        self.apply(Action::Move { channel: index, to }, shown);
+        self.relocate(index, to, shown);
         Ok(())
     }
 
@@ -1065,6 +1224,7 @@ mod tests {
     use super::super::measure::WAVEFORM;
     use super::super::{Channel, Quantity, Unit};
     use super::{Action, View};
+    use crate::control::Command;
 
     const TIME: Quantity = Quantity {
         name: "time",
@@ -1099,25 +1259,41 @@ mod tests {
     fn moving_a_channel_to_a_new_pane_and_back_leaves_no_empty_pane() {
         let mut view = view();
         let shown = [true; 3];
-        view.apply(
-            Action::Move {
-                channel: 1,
-                to: None,
-            },
-            &shown,
-        );
+        view.move_channel("v1", None, None, &shown).unwrap();
         assert_eq!(view.panes.len(), 2);
         assert_eq!(view.panes[0].channels, [0, 2]);
         assert_eq!(view.panes[1].channels, [1]);
-        view.apply(
-            Action::Move {
-                channel: 1,
-                to: Some(0),
-            },
-            &shown,
-        );
+        view.move_channel("v1", None, Some(0), &shown).unwrap();
         assert_eq!(view.panes.len(), 1);
         assert_eq!(view.panes[0].channels, [0, 2, 1]);
+    }
+
+    #[test]
+    fn a_pane_action_becomes_a_command_in_real_units() {
+        let view = view();
+        assert_eq!(
+            view.command(Action::Move {
+                channel: 2,
+                to: Some(0)
+            }),
+            Command::Move {
+                trace: "v2".into(),
+                quantity: Some("voltage".into()),
+                to: Some(0),
+            }
+        );
+        assert_eq!(
+            view.command(Action::Zoom {
+                pane: 0,
+                x: [0.5, 1.5],
+                y: [-1.0, 1.0]
+            }),
+            Command::Zoom {
+                x: Some([0.5, 1.5]),
+                y: Some([-1.0, 1.0]),
+                pane: 0
+            }
+        );
     }
 
     #[test]
@@ -1160,5 +1336,259 @@ mod tests {
         assert!(view.trigger_line().unwrap().contains("clk rising"));
         view.clear_trigger(&[true]);
         assert_eq!(view.channels[0].x, [0.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn regression_replacement_assigns_new_channels() {
+        let mut old = view();
+        old.channels.pop();
+        old.panes[0].channels.pop();
+        old.replace(view(), &[true; 3], false);
+        assert_eq!(old.panes[0].channels, [0, 1, 2]);
+    }
+
+    #[test]
+    fn regression_csv_quotes_headers_and_unions_grids() {
+        let mut view = view();
+        view.channels[0].name = "out [a,b]".into();
+        view.channels[1].shift_x(-0.5);
+        view.fit(&[true, true, false]);
+        let csv = view.csv(&[true, true, false]);
+        assert!(csv.starts_with(
+            "time (s),\"out [a,b] voltage (V)\",v1 voltage (V)\n"
+        ));
+        assert!(csv.contains("0,0,\n"));
+        assert!(csv.contains("0.5,0,1\n"));
+        assert!(csv.contains("3.5,,1\n"));
+        assert_eq!(super::csv_field("a\"b\nc\r"), "\"a\"\"b\nc\r\"");
+    }
+
+    #[test]
+    fn regression_reference_reload_and_delay_metrics() {
+        let traces = vec![
+            kitest_scope::AcTrace {
+                name: "in".into(),
+                re: vec![2.0; 3],
+                im: vec![0.0; 3],
+            },
+            kitest_scope::AcTrace {
+                name: "out".into(),
+                re: vec![4.0; 3],
+                im: vec![0.0; 3],
+            },
+        ];
+        let make =
+            || super::super::bode::view(&[10.0, 100.0, 1000.0], &traces, &[]);
+        let mut view = make();
+        view.set_reference(Some(0), &[true; 2]);
+        let reversed: Vec<_> = traces.iter().rev().cloned().collect();
+        let next =
+            super::super::bode::view(&[10.0, 100.0, 1000.0], &reversed, &[]);
+        view.replace(next, &[true; 2], false);
+        assert_eq!(view.reference_trace(), Some(1));
+        let out = view
+            .channels
+            .iter()
+            .find(|c| c.name == "out" && c.quantity.name == "magnitude")
+            .unwrap();
+        assert!((out.y[0] - 20.0 * 2f64.log10()).abs() < 1e-10);
+        let old = view
+            .reference
+            .iter()
+            .find(|c| c.name == "out" && c.quantity.name == "magnitude")
+            .unwrap();
+        assert_eq!(out.y, old.y);
+        let delay = view.group_delay(&[true; 2]).unwrap();
+        for metric in [
+            super::Measurement::Frequency,
+            super::Measurement::RiseTime,
+            super::Measurement::FallTime,
+        ] {
+            assert!(delay.measure("out", None, &[metric], None).is_err());
+        }
+    }
+
+    #[test]
+    fn regression_trigger_uses_run_identity_and_restores_regions() {
+        let make = |time: Vec<f64>, region| {
+            View::new(
+                "transient",
+                TIME,
+                vec![Channel::new(
+                    "clk",
+                    0,
+                    VOLTAGE,
+                    time,
+                    vec![0.0, 1.0, 0.0],
+                )],
+                vec![vec![0]],
+                &[kitest_scope::Expectation {
+                    trace: "clk".into(),
+                    passed: true,
+                    message: String::new(),
+                    region,
+                }],
+            )
+        };
+        let mut first = make(
+            vec![0.0, 1.0, 2.0],
+            kitest_scope::Region::Band {
+                start: 0.0,
+                end: 1.0,
+                low: 0.0,
+                high: 1.0,
+            },
+        );
+        let mut second = make(
+            vec![0.0, 2.0, 4.0],
+            kitest_scope::Region::Swing {
+                start: 0.0,
+                end: 2.0,
+                centre: 0.5,
+                minimum: 1.0,
+            },
+        );
+        first.name_run(0, 0, " [a]");
+        second.name_run(1, 1, " [b]");
+        first.append(second);
+        first.set_trigger_level(1, 0.5, true, &[true; 2]);
+        assert_eq!(first.channels[0].x, [-0.5, 0.5, 1.5]);
+        assert_eq!(first.channels[1].x, [-1.0, 1.0, 3.0]);
+        assert!(matches!(
+            first.expectations[0].region,
+            kitest_scope::Region::Band { start: -0.5, .. }
+        ));
+        assert!(matches!(
+            first.expectations[1].region,
+            kitest_scope::Region::Swing { start: -1.0, .. }
+        ));
+        let aligned = first.expectations.clone();
+        first.apply_trigger(false);
+        assert_eq!(first.expectations, aligned);
+        assert_eq!(first.channels[1].x, [-1.0, 1.0, 3.0]);
+        first.clear_trigger(&[true; 2]);
+        assert_eq!(first.channels[1].x, [0.0, 2.0, 4.0]);
+        assert_eq!(first.expectations, first.source_expectations);
+    }
+
+    #[test]
+    fn regression_delay_rejects_waveform_metrics() {
+        let traces = [kitest_scope::AcTrace {
+            name: "out".into(),
+            re: vec![1.0; 3],
+            im: vec![0.0; 3],
+        }];
+        let view =
+            super::super::bode::view(&[10.0, 100.0, 1000.0], &traces, &[]);
+        let delay = view.group_delay(&[true]).unwrap();
+        for metric in [
+            super::Measurement::Frequency,
+            super::Measurement::RiseTime,
+            super::Measurement::FallTime,
+        ] {
+            assert!(delay.measure("out", None, &[metric], None).is_err());
+            assert!(
+                delay.channels[0]
+                    .quantity
+                    .measurements
+                    .contains(&super::Measurement::Min)
+            );
+        }
+    }
+
+    #[test]
+    fn regression_spectrum_keeps_valid_run_when_hidden_run_has_no_window() {
+        let channels = vec![
+            Channel::new("short", 0, VOLTAGE, vec![0.0, 1.0], vec![0.0, 1.0]),
+            Channel::new(
+                "long",
+                1,
+                VOLTAGE,
+                vec![0.0, 1.0, 2.0, 3.0],
+                vec![0.0, 1.0, 0.0, 1.0],
+            ),
+        ];
+        let mut primary =
+            View::new("transient", TIME, channels, vec![vec![0, 1]], &[]);
+        primary.zoom_x([2.0, 3.0]).unwrap();
+        let mut spectrum = primary
+            .spectrum(&[false, true])
+            .expect("shown run has valid samples");
+        assert_eq!(spectrum.channels.len(), 1);
+        assert_eq!(spectrum.channels[0].trace, 1);
+        spectrum.set_cursors(Some(10.0), Some(20.0)).unwrap();
+        spectrum.zoom_x([1.0, 100.0]).unwrap();
+        let before = spectrum.state(&[false, true]);
+        primary.zoom_x([0.0, 3.0]).unwrap();
+        spectrum.replace(
+            primary.spectrum(&[false, true]).unwrap(),
+            &[false, true],
+            false,
+        );
+        assert_eq!(spectrum.channels.len(), 2);
+        assert_eq!(spectrum.state(&[false, true]).cursors, before.cursors);
+        assert_eq!(spectrum.state(&[false, true]).x.range, before.x.range);
+        assert!(
+            spectrum.state(&[true, true]).panes[0]
+                .channels
+                .contains(&"short".to_owned())
+        );
+    }
+
+    #[test]
+    fn regression_delay_discards_fades_when_reference_basis_changes() {
+        let traces = vec![
+            kitest_scope::AcTrace {
+                name: "in".into(),
+                re: vec![1.0; 3],
+                im: vec![0.0, 0.5, 1.0],
+            },
+            kitest_scope::AcTrace {
+                name: "out".into(),
+                re: vec![1.0; 3],
+                im: vec![0.0, 1.0, 2.0],
+            },
+        ];
+        let mut primary =
+            super::super::bode::view(&[10.0, 100.0, 1000.0], &traces, &[]);
+        primary.set_reference(Some(0), &[true; 2]);
+        let mut delay = primary.group_delay(&[true; 2]).unwrap();
+        delay.set_cursors(Some(20.0), Some(200.0)).unwrap();
+        delay.zoom_x([10.0, 500.0]).unwrap();
+        delay
+            .set_measurements(0, vec![super::Measurement::Max])
+            .unwrap();
+        let before = delay.state(&[true; 2]);
+        primary.set_reference(None, &[true; 2]);
+        delay.replace(
+            primary.group_delay(&[true; 2]).unwrap(),
+            &[true; 2],
+            false,
+        );
+        assert!(
+            delay.reference.is_empty(),
+            "reference-relative and absolute delays cannot overlay"
+        );
+        assert_eq!(delay.state(&[true; 2]).cursors, before.cursors);
+        assert_eq!(delay.state(&[true; 2]).x.range, before.x.range);
+        assert_eq!(
+            delay.state(&[true; 2]).panes[0].measurements,
+            before.panes[0].measurements
+        );
+        primary.set_reference(Some(0), &[true; 2]);
+        delay.replace(
+            primary.group_delay(&[true; 2]).unwrap(),
+            &[true; 2],
+            false,
+        );
+        assert!(delay.reference.is_empty());
+        let next =
+            super::super::bode::view(&[10.0, 100.0, 1000.0], &traces[1..], &[]);
+        primary.replace(next, &[true], false);
+        delay.replace(primary.group_delay(&[true]).unwrap(), &[true], false);
+        assert!(
+            delay.reference.is_empty(),
+            "removed reference restores absolute basis"
+        );
     }
 }

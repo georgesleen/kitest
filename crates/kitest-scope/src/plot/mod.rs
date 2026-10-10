@@ -95,6 +95,8 @@ impl Quantity {
 struct Channel {
     name: String,
     trace: usize,
+    run: usize,
+    identity: String,
     quantity: Quantity,
     source_x: Vec<f64>,
     x: Vec<f64>,
@@ -120,6 +122,8 @@ impl Channel {
         Self {
             name: name.to_owned(),
             trace,
+            run: 0,
+            identity: name.to_owned(),
             quantity,
             source_x: x.clone(),
             x,

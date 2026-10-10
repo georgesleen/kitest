@@ -10,7 +10,6 @@ use crate::Curve;
 /// A curve's amplitude spectrum over a time window.
 pub struct Spectrum {
     bin_width: f64,
-    samples: usize,
     raw: Vec<f64>,
     amplitudes: Vec<f64>,
 }
@@ -56,13 +55,16 @@ impl Curve<'_> {
         let raw: Vec<f64> = output.iter().map(|bin| bin.norm()).collect();
         let amplitudes = raw
             .iter()
-            .map(|magnitude| {
-                2.0 * magnitude / (samples as f64 * coherent_gain())
+            .enumerate()
+            .map(|(bin, magnitude)| {
+                let paired = bin != 0
+                    && !(samples.is_multiple_of(2) && bin == samples / 2);
+                let factor = if paired { 2.0 } else { 1.0 };
+                factor * magnitude / (samples as f64 * coherent_gain())
             })
             .collect();
         Some(Spectrum {
             bin_width: 1.0 / (samples as f64 * dt),
-            samples,
             raw,
             amplitudes,
         })
@@ -122,10 +124,9 @@ impl Spectrum {
     /// The tone at `bin`, refined between its neighbours.
     fn tone(&self, bin: usize) -> Tone {
         let offset = self.parabolic_offset(bin);
-        let gain = coherent_gain() * hann_lobe(offset);
         Tone {
             hertz: (bin as f64 + offset) * self.bin_width,
-            amplitude: 2.0 * self.raw[bin] / (self.samples as f64 * gain),
+            amplitude: self.amplitudes[bin] / hann_lobe(offset),
         }
     }
 
@@ -191,6 +192,103 @@ mod tests {
     use std::f64::consts::PI;
 
     use crate::Curve;
+
+    #[test]
+    fn nyquist_amplitude_is_not_doubled() {
+        let samples = 64;
+        let time: Vec<f64> = (0..samples).map(|index| index as f64).collect();
+        let values: Vec<f64> = (0..samples)
+            .map(|index| if index % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let spectrum = Curve::new(&time, &values)
+            .spectrum(0.0..=time[samples - 1], samples)
+            .unwrap();
+        let amplitude = spectrum.amplitudes()[samples / 2];
+        let dbv = 20.0 * amplitude.log10();
+        assert!((amplitude - 1.0).abs() < 1e-12, "{amplitude} V, {dbv} dBV");
+        assert!(dbv.abs() < 1e-12, "{dbv} dBV");
+        let tone = spectrum.dominant().unwrap();
+        assert_eq!(tone.hertz, 0.5);
+        assert!((tone.amplitude - 1.0).abs() < 1e-12);
+        assert!(
+            (spectrum.tone_near(0.5).unwrap().amplitude - 1.0).abs() < 1e-12
+        );
+    }
+
+    #[test]
+    fn dc_amplitude_is_not_doubled() {
+        let samples = 64;
+        let time: Vec<f64> = (0..samples).map(|index| index as f64).collect();
+        let values: Vec<f64> = time
+            .iter()
+            .map(|time| (2.0 * PI * time / samples as f64).cos())
+            .collect();
+        let spectrum = Curve::new(&time, &values)
+            .spectrum(0.0..=time[samples - 1], samples)
+            .unwrap();
+        // The Hann taper leaves a DC component of magnitude one half.
+        assert!((spectrum.amplitudes()[0] - 0.5).abs() < 1e-12);
+        assert!((spectrum.tone(0).amplitude - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn paired_bins_are_doubled_in_even_and_odd_transforms() {
+        for samples in [64, 65] {
+            let time: Vec<f64> =
+                (0..samples).map(|index| index as f64).collect();
+            for bin in [8, (samples - 1) / 2] {
+                let values: Vec<f64> = time
+                    .iter()
+                    .map(|time| {
+                        (2.0 * PI * bin as f64 * time / samples as f64).sin()
+                    })
+                    .collect();
+                let spectrum = Curve::new(&time, &values)
+                    .spectrum(0.0..=time[samples - 1], samples)
+                    .unwrap();
+                // At the odd last bin, the Hann lobes of the sine's pair overlap.
+                let expected = if samples % 2 == 1 && bin == samples / 2 {
+                    1.5
+                } else {
+                    1.0
+                };
+                assert!(
+                    (spectrum.amplitudes()[bin] - expected).abs() < 1e-12,
+                    "{samples} samples, bin {bin}: {}",
+                    spectrum.amplitudes()[bin]
+                );
+                if samples % 2 == 1 && bin == samples / 2 {
+                    assert!(
+                        (spectrum.tone(bin).amplitude - expected).abs() < 1e-12
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn distortion_uses_the_undoubled_nyquist_harmonic() {
+        let samples = 64;
+        let time: Vec<f64> = (0..samples).map(|index| index as f64).collect();
+        let values: Vec<f64> = time
+            .iter()
+            .map(|time| {
+                (2.0 * PI * 0.25 * time).cos()
+                    + 0.1 * (2.0 * PI * 0.5 * time).cos()
+            })
+            .collect();
+        let spectrum = Curve::new(&time, &values)
+            .spectrum(0.0..=time[samples - 1], samples)
+            .unwrap();
+        assert!((spectrum.dominant().unwrap().amplitude - 1.0).abs() < 1e-12);
+        assert!(
+            (spectrum.tone_near(0.5).unwrap().amplitude - 0.1).abs() < 1e-12
+        );
+        assert!(
+            (spectrum.total_harmonic_distortion(2).unwrap() - 0.1).abs()
+                < 1e-12
+        );
+    }
 
     #[test]
     fn a_tone_between_bins_keeps_its_frequency_and_amplitude() {

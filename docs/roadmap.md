@@ -162,7 +162,8 @@ Done:
   zero.
 - A JSON-RPC command protocol on the live window's socket, behind every
   menu action, with `kitest-scope ctl` for the live window and
-  `kitest-scope query` for a capture file without one. See `scope.md`.
+  `kitest-scope query` for a capture file without one. See the
+  [scope guide](scope.md) for controls, measurements, capture APIs and JSON-RPC.
 
 One window, live:
 - Tabs and side-by-side splits beside the stacked panes, through
@@ -177,6 +178,8 @@ Instruments:
 - Control: an MCP server over the command protocol, so an agent calls the
   scope as tools.
 - VNA: Smith and polar charts once a port or impedance probe exists.
+
+See [scope-next.md](scope-next.md) for the pending instrument and control designs.
 
 ## Reference design
 

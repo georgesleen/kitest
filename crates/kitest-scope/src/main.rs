@@ -60,7 +60,14 @@ fn ctl(method: &str, params: Option<&str>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match control::call(&live::socket_path(), method, params) {
+    let socket = match live::socket_path() {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!("error: scope socket: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    match control::call(&socket, method, params) {
         Ok(result) => print_json(&result),
         Err(control::ClientError::NoWindow) => {
             eprintln!(
@@ -203,13 +210,13 @@ impl Scope {
 
     /// Carries out `command`, which `waiting` asked for over the socket.
     ///
-    /// A PNG replies once the screenshot arrives, so it returns `None`.
+    /// A PNG replies once the screenshot arrives.
     fn execute(
         &mut self,
         ctx: &egui::Context,
         command: Command,
         waiting: Option<(Json, Sender<String>)>,
-    ) -> Result<Option<Json>, control::Error> {
+    ) -> Result<(), control::Error> {
         match command {
             Command::Save {
                 format: Format::Png,
@@ -224,14 +231,14 @@ impl Scope {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
                     egui::UserData::default(),
                 ));
-                Ok(None)
+                Ok(())
             }
             command => {
                 let result = self.model.apply(command)?;
                 if let Some((id, reply)) = waiting {
-                    let _ = reply.send(control::reply(id, Ok(result.clone())));
+                    let _ = reply.send(control::reply(id, Ok(result)));
                 }
-                Ok(Some(result))
+                Ok(())
             }
         }
     }
@@ -245,10 +252,12 @@ impl Scope {
                 self.execute(
                     ctx,
                     command,
-                    Some((id.clone(), envelope.reply.clone())),
+                    id.clone().map(|id| (id, envelope.reply.clone())),
                 )
             });
-            if let Err(error) = outcome {
+            if let Err(error) = outcome
+                && let Some(id) = id
+            {
                 let _ = envelope.reply.send(control::reply(id, Err(error)));
             }
         }
@@ -451,10 +460,15 @@ impl eframe::App for Scope {
             }
             ui.label(status);
         });
-        egui::CentralPanel::default().show(ui, |ui| {
-            let (view, shown) = self.model.active_mut();
-            view.show(ui, shown);
-        });
+        let commands = egui::CentralPanel::default()
+            .show(ui, |ui| {
+                let (view, shown) = self.model.active_mut();
+                view.show(ui, shown)
+            })
+            .inner;
+        for command in commands {
+            self.run(&ctx, command);
+        }
         if let Some(dialog) = &mut self.dialog
             && let Some(choice) = dialog.show(&ctx)
         {
