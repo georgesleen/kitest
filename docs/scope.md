@@ -183,7 +183,7 @@ capture.save(std::path::Path::new("step-response.json"))?;
 ```
 
 Here `transient` and `check` are already computed results. See the runnable
-[RC capture example](../crates/kitest/examples/rc_capture.rs) for transient and
+[RC capture example](https://github.com/georgesleen/kitest/blob/main/crates/kitest/examples/rc_capture.rs) for transient and
 AC capture generation.
 
 Python uses the same format:
