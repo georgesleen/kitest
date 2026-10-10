@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use kitest_scope::{Expectation, Region};
+
 use super::{Signal, Tolerance};
 
 /// Whether an assertion passed, and a sentence saying why.
@@ -10,12 +12,40 @@ use super::{Signal, Tolerance};
 pub struct Check {
     passed: bool,
     message: String,
+    regions: Vec<Part>,
+}
+
+/// One part of a check, with the region it holds a trace to.
+#[derive(Debug, Clone, PartialEq)]
+struct Part {
+    region: Region,
+    passed: bool,
+    message: String,
 }
 
 impl Check {
     /// A check with a message written by the caller.
     pub fn new(passed: bool, message: String) -> Self {
-        Self { passed, message }
+        Self {
+            passed,
+            message,
+            regions: Vec::new(),
+        }
+    }
+
+    /// A check that passes when every one of `checks` passes, with their
+    /// messages and regions in order.
+    pub fn all(checks: impl IntoIterator<Item = Check>) -> Self {
+        let mut all = Self::new(true, String::new());
+        for check in checks {
+            all.passed &= check.passed;
+            if !all.message.is_empty() {
+                all.message.push_str("; ");
+            }
+            all.message.push_str(&check.message);
+            all.regions.extend(check.regions);
+        }
+        all
     }
 
     /// Whether `measured` is within `tolerance` of `expected`, in `unit`.
@@ -68,7 +98,23 @@ impl Check {
                 )
             }
         };
-        Self::new(passed, message)
+        let check = Self::new(passed, message);
+        signal
+            .time()
+            .first()
+            .zip(signal.time().last())
+            .and_then(|(&first, &last)| {
+                (last - first >= window).then(|| {
+                    let band = tolerance.band(target);
+                    Region::Band {
+                        start: last - window,
+                        end: last,
+                        low: target - band,
+                        high: target + band,
+                    }
+                })
+            })
+            .map_or(check.clone(), |region| check.with_region(region))
     }
 
     /// Whether the assertion passed.
@@ -79,6 +125,30 @@ impl Check {
     /// What was measured against what was expected.
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Adds where the check holds the trace.
+    pub fn with_region(mut self, region: Region) -> Self {
+        self.regions.push(Part {
+            region,
+            passed: self.passed,
+            message: self.message.clone(),
+        });
+        self
+    }
+
+    /// The expectations to draw on `trace`, one per region, each with its own
+    /// verdict; empty when the check holds no region.
+    pub fn expectations(&self, trace: &str) -> Vec<Expectation> {
+        self.regions
+            .iter()
+            .map(|part| Expectation {
+                trace: trace.to_owned(),
+                passed: part.passed,
+                message: part.message.clone(),
+                region: part.region,
+            })
+            .collect()
     }
 }
 
@@ -129,5 +199,53 @@ mod tests {
     fn near_passes_on_the_band_edge_and_fails_past_it() {
         assert!(Check::near(2.525, 2.5, Tolerance::percent(1.0), "V").passed());
         assert!(!Check::near(2.53, 2.5, Tolerance::percent(1.0), "V").passed());
+    }
+
+    #[test]
+    fn settles_carries_its_time_and_voltage_band_into_an_expectation() {
+        let time = [0.0, 1.0, 2.0, 3.0];
+        let values = [0.0, 0.96, 0.98, 1.0];
+        let check = Check::settles(
+            &Signal::new(&time, &values),
+            1.0,
+            Tolerance::abs(0.05),
+            2.0,
+        );
+        let [expectation] = check.expectations("out").try_into().unwrap();
+        assert!(expectation.passed);
+        assert_eq!(expectation.trace, "out");
+        assert_eq!(
+            expectation.region,
+            Region::Band {
+                start: 1.0,
+                end: 3.0,
+                low: 0.95,
+                high: 1.05,
+            }
+        );
+    }
+
+    #[test]
+    fn all_keeps_each_parts_own_verdict_and_region() {
+        let frequency = Region::Frequency {
+            low: 9.0,
+            high: 11.0,
+        };
+        let distortion = Region::Distortion {
+            fundamental: 10.0,
+            amplitude: 1.0,
+            maximum: 0.05,
+        };
+        let check = Check::all([
+            Check::new(true, "in band".into()).with_region(frequency),
+            Check::new(false, "too distorted".into()).with_region(distortion),
+        ]);
+        assert!(!check.passed());
+        assert_eq!(check.message(), "in band; too distorted");
+        let expectations = check.expectations("out");
+        assert_eq!(expectations.len(), 2);
+        assert!(expectations[0].passed && !expectations[1].passed);
+        assert_eq!(expectations[1].message, "too distorted");
+        assert_eq!(expectations[1].region, distortion);
     }
 }

@@ -1,0 +1,32 @@
+[package]
+name = "kitest-scope"
+version = "0.0.0"
+description = "A scope for simulation traces: waveforms and Bode plots"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+eframe = { version = "0.36.2", optional = true }
+egui_plot = { version = "0.37.0", optional = true }
+kitest-measure = { version = "0.0.0", path = "../kitest-measure", optional = true }
+libc = { version = "0.2", optional = true }
+png = { version = "0.18.1", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2"
+
+[features]
+default = ["viewer"]
+# The window. Without it the crate is only the trace file format, which is
+# what a writer such as kitest depends on.
+viewer = ["dep:eframe", "dep:egui_plot", "dep:kitest-measure", "dep:libc", "dep:png"]
+
+[[bin]]
+name = "kitest-scope"
+path = "src/main.rs"
+required-features = ["viewer"]
+
+[dev-dependencies]
+tempfile = "3.27.0"

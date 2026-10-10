@@ -14,7 +14,16 @@ pub enum Expectation {
     /// The operating-point voltage is within `within` of `near` volts.
     Dc { near: f64, within: Tolerance },
     /// The net oscillates at a frequency within `within` of `near` hertz.
-    Oscillates { near: f64, within: Tolerance },
+    ///
+    /// When given, its steady swing, half its peak-to-peak voltage, is at
+    /// least `min_swing` volts, and its total harmonic distortion is at most
+    /// `max_thd`, a fraction of the fundamental.
+    Oscillates {
+        near: f64,
+        within: Tolerance,
+        min_swing: Option<f64>,
+        max_thd: Option<f64>,
+    },
 }
 
 /// Why an `Expect` field could not be read.
@@ -34,7 +43,8 @@ impl ExpectError {
 
 /// The checks a probe can state, with their keywords, for error messages.
 const CHECKS: &str = "dc(near=3.3V, within=5%) or \
-                      oscillates(near=10.4MHz, within=2%)";
+                      oscillates(near=10.4MHz, within=2%, min_swing=1V, \
+                      max_thd=5%), whose min_swing= and max_thd= are optional";
 
 /// The tolerances a check accepts, for error messages.
 const TOLERANCES: &str = "a percentage such as 5%, an amount such as 100mV, \
@@ -230,21 +240,16 @@ fn is_quantity_char(c: char) -> bool {
 }
 
 fn expectation(call: &Call<'_>) -> Result<Expectation, ExpectError> {
-    let (unit, build): (Unit, fn(f64, Tolerance) -> Expectation) = match call
-        .name
-    {
-        "dc" => (Unit::Volt, |near, within| Expectation::Dc { near, within }),
-        "oscillates" => (Unit::Hertz, |near, within| Expectation::Oscillates {
-            near,
-            within,
-        }),
+    let name = call.name;
+    let unit = match name {
+        "dc" => Unit::Volt,
+        "oscillates" => Unit::Hertz,
         other => {
             return Err(ExpectError::new(format!(
                 "unknown check {other:?}; a probe can state {CHECKS}"
             )));
         }
     };
-    let name = call.name;
     if !call.positional.is_empty() {
         return Err(ExpectError::new(format!(
             "{name} takes keyword arguments only, such as {name}(near=..., within=...)"
@@ -252,13 +257,34 @@ fn expectation(call: &Call<'_>) -> Result<Expectation, ExpectError> {
     }
     let mut near = None;
     let mut within = None;
+    let mut min_swing = None;
+    let mut max_thd = None;
     for (keyword, value) in &call.keywords {
-        match *keyword {
-            "near" => near = Some(number(name, keyword, value, unit)?),
-            "within" => within = Some(tolerance(name, value, unit)?),
-            other => {
+        match (name, *keyword) {
+            (_, "near") => near = Some(number(name, keyword, value, unit)?),
+            (_, "within") => within = Some(tolerance(name, value, unit)?),
+            ("oscillates", "min_swing") => {
+                min_swing = Some(positive(
+                    name,
+                    keyword,
+                    number(name, keyword, value, Unit::Volt)?,
+                )?);
+            }
+            ("oscillates", "max_thd") => {
+                max_thd = Some(positive(
+                    name,
+                    keyword,
+                    percent(name, keyword, value)?,
+                )?);
+            }
+            (_, other) => {
+                let accepted = if name == "oscillates" {
+                    "near=, within=, min_swing=, and max_thd="
+                } else {
+                    "near= and within="
+                };
                 return Err(ExpectError::new(format!(
-                    "{name} takes near= and within=, not {other}="
+                    "{name} takes {accepted}, not {other}="
                 )));
             }
         }
@@ -269,7 +295,48 @@ fn expectation(call: &Call<'_>) -> Result<Expectation, ExpectError> {
     let within = within.ok_or_else(|| {
         ExpectError::new(format!("{name} needs within=, such as within=5%"))
     })?;
-    Ok(build(near, within))
+    Ok(match name {
+        "dc" => Expectation::Dc { near, within },
+        _ => Expectation::Oscillates {
+            near,
+            within,
+            min_swing,
+            max_thd,
+        },
+    })
+}
+
+/// `value`, a percentage such as `5%`, as a fraction.
+fn percent(
+    name: &str,
+    keyword: &str,
+    value: &Value<'_>,
+) -> Result<f64, ExpectError> {
+    let Value::Quantity(text) = value else {
+        return Err(ExpectError::new(format!(
+            "{name}'s {keyword}= is a percentage, such as {keyword}=5%"
+        )));
+    };
+    text.strip_suffix('%')
+        .and_then(|number| number.trim().replace('_', "").parse::<f64>().ok())
+        .filter(|number| number.is_finite())
+        .map(|number| number / 100.0)
+        .ok_or_else(|| {
+            ExpectError::new(format!(
+                "{name}'s {keyword}={text} is not a percentage, such as {keyword}=5%"
+            ))
+        })
+}
+
+/// `value` when it is above zero.
+fn positive(name: &str, keyword: &str, value: f64) -> Result<f64, ExpectError> {
+    if value > 0.0 {
+        Ok(value)
+    } else {
+        Err(ExpectError::new(format!(
+            "{name}'s {keyword}= must be positive"
+        )))
+    }
 }
 
 fn number(
@@ -366,7 +433,9 @@ mod tests {
             parse("oscillates(near=10.4e6, within=percent(5))"),
             Ok(Expectation::Oscillates {
                 near: 10.4e6,
-                within: Tolerance::Percent(5.0)
+                within: Tolerance::Percent(5.0),
+                min_swing: None,
+                max_thd: None,
             })
         );
         assert_eq!(
@@ -384,14 +453,18 @@ mod tests {
             parse("oscillates(near=10.4MHz, within=2%)"),
             Ok(Expectation::Oscillates {
                 near: 10.4e6,
-                within: Tolerance::Percent(2.0)
+                within: Tolerance::Percent(2.0),
+                min_swing: None,
+                max_thd: None,
             })
         );
         assert_eq!(
             parse("oscillates(near=32.768 kHz, within=50Hz)"),
             Ok(Expectation::Oscillates {
                 near: 32.768e3,
-                within: Tolerance::Abs(50.0)
+                within: Tolerance::Abs(50.0),
+                min_swing: None,
+                max_thd: None,
             })
         );
         assert_eq!(
@@ -409,6 +482,37 @@ mod tests {
         let text = message("osc(near=1, within=percent(1))");
         assert!(text.contains("\"osc\""), "{text}");
         assert!(text.contains("oscillates(near=10.4MHz"), "{text}");
+    }
+
+    #[test]
+    fn oscillates_reads_an_optional_swing_and_distortion() {
+        assert_eq!(
+            parse(
+                "oscillates(near=10MHz, within=2%, min_swing=2.5V, max_thd=15%)"
+            ),
+            Ok(Expectation::Oscillates {
+                near: 10e6,
+                within: Tolerance::Percent(2.0),
+                min_swing: Some(2.5),
+                max_thd: Some(0.15),
+            })
+        );
+        assert!(
+            message("oscillates(near=1MHz, within=2%, max_thd=0.05)")
+                .contains("not a percentage")
+        );
+        assert!(
+            message("oscillates(near=1MHz, within=2%, min_swing=1MHz)")
+                .contains("not a voltage")
+        );
+        assert!(
+            message("oscillates(near=1MHz, within=2%, min_swing=0V)")
+                .contains("must be positive")
+        );
+        assert!(
+            message("dc(near=1V, within=2%, max_thd=5%)")
+                .contains("not max_thd=")
+        );
     }
 
     #[test]

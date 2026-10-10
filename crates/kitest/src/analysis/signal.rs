@@ -1,5 +1,7 @@
 //! Time-domain waveform view and its assertions.
 
+use kitest_measure::Curve;
+
 use crate::{Tolerance, Tone};
 
 /// A time-domain waveform: real values over a time axis.
@@ -46,21 +48,18 @@ impl<'a> Signal<'a> {
         if last - first < window {
             return None;
         }
-        let start = last - window;
-        self.time
-            .iter()
-            .zip(self.values)
-            .filter(|(t, _)| **t >= start)
-            .map(|(_, v)| (*v - target).abs())
-            .reduce(f64::max)
+        self.curve().worst_deviation(target, last - window..=last)
     }
 
     /// Peak value above `target`, as a fraction of `target`.
     pub fn overshoot(&self, target: f64) -> f64 {
-        match self.values.iter().copied().reduce(f64::max) {
-            Some(peak) => ((peak - target) / target.abs()).max(0.0),
-            None => f64::NAN,
-        }
+        self.curve()
+            .overshoot(target, f64::NEG_INFINITY..=f64::INFINITY)
+            .unwrap_or(f64::NAN)
+    }
+
+    fn curve(&self) -> Curve<'a> {
+        Curve::new(self.time, self.values)
     }
 }
 

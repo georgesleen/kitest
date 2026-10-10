@@ -38,7 +38,7 @@ particular circuit is supposed to do, which only the designer knows.
 - A real oscillator measured: 2N3904 Colpitts at 10.15 MHz.
 - A failed check diagnosed from the operating point: the probe net's DC
   bias, each BJT off, saturated or active, and a labelled net at 0 V on a
-  collector or drain named as an undriven supply. `kitest --show PROBE`
+  collector or drain named as an undriven supply. `kitest --sketch PROBE`
   sketches the waveform an oscillation check ran on, in the terminal.
 - An oscillation check on a design with a crystal says crystal
   oscillators are not supported yet, instead of a misleading "still
@@ -104,15 +104,82 @@ The test should contain the design and the intent, and nothing else.
 - Diagnostics as a first-class surface. A failed assertion needs the
   spectrum, or the waveform, or the search the runner performed. An
   opaque failure is worse than no test.
-- A scope viewer for probe waveforms: zoom, cursors, and measurement
-  readouts computed by kitest's own analysis, so the numbers shown match
-  the numbers asserted. egui_plot underneath, as a standalone crate
-  published separately with measurements supplied by the caller.
+- A scope that shows every run, without being asked twice; see Scope.
 - An interactive mode: `kitest` in a KiCad project asks which net and
   what it should do, runs, and saves the result as a test. The analysis
   follows from the probes, never from a menu.
 - An install check for `ngspice` and `kicad-cli`, so a missing tool is
   a clear first message rather than a spawn error.
+
+## Scope
+
+An oscilloscope, spectrum analyser, and VNA in one window, with the one
+thing none of them has: the test's expectation drawn on the plot. It is
+the `kitest-scope` crate, standalone and egui underneath; kitest supplies
+the measurements, so the numbers shown are the numbers asserted.
+
+The data path is files. kitest writes each capture to the project's
+`.kitest/captures/`, ignored by git, and the scope reads them. A capture
+carries a stable identity (project, probe or net, analysis, corner) and
+the run's metadata, so a re-run lands where the last one did.
+
+Done:
+- The capture file, a versioned JSON transient or AC sweep, written by
+  `Transient::capture` and `Spectra::capture`.
+- A window that opens a capture: a stack of panes over one linked x axis,
+  each pane holding one or more traces of one unit on its own y axis.
+  Right-clicking a pane moves a trace into a new or another pane.
+- Scroll to zoom x, Ctrl+scroll to zoom y, middle or Ctrl+left drag to
+  pan, right drag to zoom to a box; SI units; 1-2-5 grid lines; min/max
+  decimation per pixel; a live readout of every trace at the pointer.
+- Cursors A and B with delta x, 1/delta x, and delta y per trace.
+- Measurements picked per pane, from `kitest-measure`, the crate kitest's
+  checks use: min, max, peak to peak, mean, RMS, frequency, rise and fall
+  time, and the -3 dB points, over the visible window or between the
+  cursors.
+- Bode magnitude and unwrapped phase on a log frequency axis.
+- PNG and CSV export.
+- One live window with a fixed `app_id`: later launches hand it their
+  capture through a Unix socket. It reloads the current file in place,
+  keeps layout, cursors and zoom, and fades the previous run behind the
+  new one. Captures of one identity at different corners overlay as a
+  family.
+- Version-2 captures carry a stable name, corner, and checked regions.
+  Time bands and spectrum frequency bands are shaded and coloured by
+  their verdict; pane headers carry the full PASS or FAIL message.
+- `kitest --show PROBE` writes `.kitest/captures/` and opens the live
+  scope; `--sketch` keeps the terminal view. Rust and Python can
+  explicitly attach a `Check` to a capture and save it.
+- A Hann-windowed spectrum of the visible time window, in dBV, with the
+  dominant tone, its harmonics, and the noise floor marked.
+- `oscillates()` takes an optional `min_swing=` and `max_thd=`, each
+  judged and drawn on its own: swing limits on the waveform, a
+  distortion limit on the spectrum. A capture whose checks are all
+  spectral opens on the spectrum.
+- Bode transfer functions against a selected reference trace, gain and
+  phase margin, and group delay.
+- An optional trace, level, and edge trigger that aligns re-runs to time
+  zero.
+- A JSON-RPC command protocol on the live window's socket, behind every
+  menu action, with `kitest-scope ctl` for the live window and
+  `kitest-scope query` for a capture file without one. See the
+  [scope guide](scope.md) for controls, measurements, capture APIs and JSON-RPC.
+
+One window, live:
+- Tabs and side-by-side splits beside the stacked panes, through
+  `egui_tiles`.
+- A capture-directory picker and the choice to refit instead of holding
+  zoom on reload.
+
+Instruments:
+- Oscilloscope: overshoot against the test's target.
+- Filters: `lowpass()` and `highpass()` checks driven from an input net,
+  drawn on the Bode view.
+- Control: an MCP server over the command protocol, so an agent calls the
+  scope as tools.
+- VNA: Smith and polar charts once a port or impedance probe exists.
+
+See [scope-next.md](scope-next.md) for the pending instrument and control designs.
 
 ## Reference design
 

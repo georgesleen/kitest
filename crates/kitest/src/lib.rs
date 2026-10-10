@@ -25,6 +25,10 @@ pub use kicad::{
     ProbeProblem, Rail, RailKind, SupplyError, SupplyProblem, Transistor,
     VoltageOrigin, export_design, export_netlist,
 };
+pub use kitest_scope::{
+    AcTrace, Capture, Data, Expectation as ScopeExpectation,
+    FileError as ScopeFileError, Region, Trace,
+};
 pub use models::{ModelEntry, ModelError, ModelKind, ModelLibrary};
 pub use sim::{Backend, Ngspice, NgspiceError};
 pub use stimulus::{AcSupply, DcSupply, Pulse, Sin, TranSource};

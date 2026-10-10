@@ -22,3 +22,12 @@ cargo run -p kitest -- examples/kicad/colpitts
 
 - The docs site: <https://georgesleen.com/kitest/>
 - How a ticket goes from claim to merge: [docs/workflow.md](docs/workflow.md)
+- [Probe Expect fields](docs/expect.md): DC and oscillation checks, tolerances,
+  swing and harmonic-distortion limits, and simulation limits.
+- [Scope reference](docs/scope.md): Rust/Python captures, JSON v2, waveform,
+  spectrum and Bode views, controls, measurements, exports, and live commands.
+- [Pending scope designs](docs/scope-next.md): proposals, not implemented APIs.
+
+`kitest --show PROBE [PROJECT]` runs checks and opens the probe's waveform in
+`kitest-scope`; `kitest --sketch PROBE [PROJECT]` prints it in the terminal.
+Open a saved capture directly with `kitest-scope FILE`.

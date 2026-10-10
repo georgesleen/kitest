@@ -7,6 +7,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+kitest-measure = { version = "0.0.0", path = "../kitest-measure" }
+kitest-scope = { version = "0.0.0", path = "../kitest-scope", default-features = false }
 num-complex = "0.4.6"
 realfft = "3.5.0"
 roxmltree = "0.21.1"

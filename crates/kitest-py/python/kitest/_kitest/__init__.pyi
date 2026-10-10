@@ -7,6 +7,7 @@ import typing
 __all__ = [
     "Ac",
     "AcSupply",
+    "Capture",
     "Check",
     "CheckError",
     "Config",
@@ -56,6 +57,20 @@ class AcSupply:
     def __new__(cls, node: builtins.str) -> AcSupply: ...
     def bias(self, bias: builtins.float) -> AcSupply: ...
     def magnitude(self, magnitude: builtins.float) -> AcSupply: ...
+
+@typing.final
+class Capture:
+    r"""
+    A scope capture, with expectations explicitly attached before it is saved.
+    """
+    def expect(self, trace: builtins.str, check: Check) -> None:
+        r"""
+        Attach `check` to `trace`.
+        """
+    def save(self, path: builtins.str) -> None:
+        r"""
+        Save the capture as versioned JSON.
+        """
 
 @typing.final
 class Check:
@@ -362,6 +377,10 @@ class Sin:
 class Spectra:
     def node(self, node: builtins.str) -> Response: ...
     def nodes(self) -> builtins.list[builtins.str]: ...
+    def capture(self, name: builtins.str) -> Capture:
+        r"""
+        Every node's response as a scope capture named `name`.
+        """
 
 class SupplyError(KitestError):
     r"""
@@ -433,6 +452,10 @@ class TranSource:
 class Transient:
     def node(self, node: builtins.str) -> Signal: ...
     def nodes(self) -> builtins.list[builtins.str]: ...
+    def capture(self, name: builtins.str) -> Capture:
+        r"""
+        Every node's waveform as a scope capture named `name`.
+        """
 
 @typing.final
 class Voltage:
