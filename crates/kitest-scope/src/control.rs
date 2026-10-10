@@ -39,6 +39,7 @@ pub const METHODS: &[&str] = &[
     "cursors",
     "measure",
     "measurements",
+    "harmonics",
     "move",
     "reference",
     "trigger",
@@ -95,6 +96,8 @@ pub enum Command {
         pane: usize,
         measurements: Vec<Measurement>,
     },
+    /// Show or hide the spectrum's harmonic guides.
+    Harmonics { shown: bool },
     /// Move a trace's channel into pane `to`, or into a new pane.
     Move {
         trace: String,
@@ -597,6 +600,22 @@ mod tests {
     }
 
     #[test]
+    fn harmonics_parses_a_required_boolean() {
+        for shown in [false, true] {
+            let request = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"harmonics","params":{{"shown":{shown}}}}}"#
+            );
+            assert_eq!(command(&request), Ok(Command::Harmonics { shown }));
+        }
+        for params in ["{}", r#"{"shown":null}"#, r#"{"shown":"true"}"#] {
+            let request = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"harmonics","params":{params}}}"#
+            );
+            assert!(command(&request).is_err());
+        }
+    }
+
+    #[test]
     fn every_method_name_parses() {
         let params = [
             ("open", r#"{"path":"/tmp/a.json"}"#),
@@ -608,6 +627,7 @@ mod tests {
             ("cursors", "{}"),
             ("measure", r#"{"trace":"v","measurements":[]}"#),
             ("measurements", r#"{"pane":0,"measurements":["min"]}"#),
+            ("harmonics", r#"{"shown":true}"#),
             ("move", r#"{"trace":"v"}"#),
             ("reference", "{}"),
             ("trigger", r#"{"trace":"v","edge":"falling","level":0.5}"#),

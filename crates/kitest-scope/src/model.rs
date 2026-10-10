@@ -165,6 +165,10 @@ impl Model {
                 view.set_measurements(pane, measurements)
                     .map_err(Error::invalid)?;
             }
+            Command::Harmonics { shown } => {
+                let (view, _) = self.active_mut();
+                view.set_harmonics(shown).map_err(Error::invalid)?;
+            }
             Command::Move {
                 trace,
                 quantity,
@@ -654,6 +658,30 @@ mod tests {
             model.state()["plot"]["expectations"][1]["region"]["start"],
             0.0
         );
+    }
+
+    #[test]
+    fn harmonics_commands_toggle_spectrum_and_preserve_rebuild_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = capture(directory.path(), Vec::new());
+        let mut model = Model::load(&path).unwrap();
+        assert!(model.apply(Command::Harmonics { shown: true }).is_err());
+        assert!(model.state()["plot"].get("harmonics").is_none());
+        model.set_view(ViewName::Spectrum).unwrap();
+        assert_eq!(model.state()["plot"]["harmonics"], false);
+        let expectations = model.state()["plot"]["expectations"].clone();
+        let state = model.apply(Command::Harmonics { shown: true }).unwrap();
+        assert_eq!(state["plot"]["harmonics"], true);
+        assert_eq!(state["plot"]["expectations"], expectations);
+        model.apply(Command::Fit).unwrap();
+        assert_eq!(model.state()["plot"]["harmonics"], true);
+        model.open(&path).unwrap();
+        assert_eq!(model.state()["plot"]["harmonics"], true);
+        let state = model.apply(Command::Harmonics { shown: false }).unwrap();
+        assert_eq!(state["plot"]["harmonics"], false);
+        model.set_view(ViewName::Primary).unwrap();
+        assert!(model.state()["plot"].get("harmonics").is_none());
+        assert!(model.apply(Command::Harmonics { shown: false }).is_err());
     }
 
     #[test]

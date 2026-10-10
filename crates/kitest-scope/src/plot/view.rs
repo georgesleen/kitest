@@ -53,6 +53,8 @@ pub struct View {
     expectations: Vec<kitest_scope::Expectation>,
     source_expectations: Vec<kitest_scope::Expectation>,
     fixed_markers: Vec<(usize, f64, String)>,
+    harmonic_markers: Vec<(usize, f64, String)>,
+    show_harmonics: Option<bool>,
     horizontal_markers: Vec<(usize, f64, String)>,
     reference_trace: Option<usize>,
     reference_basis: Option<String>,
@@ -99,6 +101,8 @@ impl View {
             expectations: expectations.to_vec(),
             source_expectations: expectations.to_vec(),
             fixed_markers: Vec::new(),
+            harmonic_markers: Vec::new(),
+            show_harmonics: (kind == "spectrum").then_some(false),
             horizontal_markers: Vec::new(),
             reference_trace: None,
             reference_basis: None,
@@ -177,6 +181,7 @@ impl View {
         }
         let old_channels = std::mem::take(&mut self.channels);
         next.trigger = self.trigger.clone();
+        next.show_harmonics = self.show_harmonics;
         next.apply_trigger(refit);
         next.link.a = self.link.a;
         next.link.b = self.link.b;
@@ -245,6 +250,7 @@ impl View {
         let over = self.link.x.range();
         let mut channels = Vec::new();
         let mut markers = Vec::new();
+        let mut harmonic_markers = Vec::new();
         let mut horizontal_markers = Vec::new();
         for channel in &self.channels {
             let samples = channel
@@ -287,7 +293,12 @@ impl View {
                         } else {
                             format!("{harmonic}f")
                         };
-                        markers.push((channel.trace, hertz.log10(), label));
+                        let marker = (channel.trace, hertz.log10(), label);
+                        if harmonic == 1 {
+                            markers.push(marker);
+                        } else {
+                            harmonic_markers.push(marker);
+                        }
                     }
                 }
             }
@@ -311,6 +322,7 @@ impl View {
             &self.expectations,
         );
         view.fixed_markers = markers;
+        view.harmonic_markers = harmonic_markers;
         view.horizontal_markers = horizontal_markers;
         Some(view)
     }
@@ -630,6 +642,7 @@ impl View {
             panes: &quantities,
             expectations: &self.expectations,
             horizontal_markers: &self.horizontal_markers,
+            show_harmonics: self.show_harmonics,
         };
         let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
         let strips: f32 = self
@@ -675,6 +688,7 @@ impl View {
             Action::Measurements { pane, measurements } => {
                 Command::Measurements { pane, measurements }
             }
+            Action::Harmonics { shown } => Command::Harmonics { shown },
             Action::Zoom { pane, x, y } => Command::Zoom {
                 x: Some([real(x[0]), real(x[1])]),
                 y: Some(y),
@@ -707,6 +721,9 @@ impl View {
     fn markers(&self, shown: &[bool]) -> Vec<(usize, f64, String)> {
         let over = self.link.over();
         let mut markers = self.fixed_markers.clone();
+        if self.show_harmonics == Some(true) {
+            markers.extend(self.harmonic_markers.iter().cloned());
+        }
         for pane in self
             .panes
             .iter()
@@ -861,6 +878,8 @@ pub struct State {
     /// Margins and similar readings the view prints.
     pub annotations: Vec<String>,
     pub expectations: Vec<kitest_scope::Expectation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harmonics: Option<bool>,
 }
 
 /// One axis: what it measures and the window it shows, in its unit.
@@ -937,6 +956,7 @@ impl View {
             }),
             annotations: self.annotations.clone(),
             expectations: self.expectations.clone(),
+            harmonics: self.show_harmonics,
         }
     }
 
@@ -1063,6 +1083,19 @@ impl View {
             readings.insert(measurement, reading);
         }
         Ok(readings)
+    }
+
+    /// Shows or hides harmonic guides in the spectrum.
+    ///
+    /// # Errors
+    ///
+    /// When this is not a spectrum view.
+    pub fn set_harmonics(&mut self, shown: bool) -> Result<(), String> {
+        let setting = self.show_harmonics.as_mut().ok_or_else(|| {
+            "harmonic guides require a spectrum view".to_owned()
+        })?;
+        *setting = shown;
+        Ok(())
     }
 
     /// Sets what pane `pane` measures and shows in its strip.
@@ -1494,6 +1527,71 @@ mod tests {
                     .contains(&super::Measurement::Min)
             );
         }
+    }
+
+    #[test]
+    fn spectrum_harmonics_are_opt_in_and_survive_navigation_and_rebuilds() {
+        const SAMPLES: usize = 1024;
+        const TONE_HERTZ: f64 = 8.0;
+        let time: Vec<f64> = (0..=SAMPLES)
+            .map(|sample| sample as f64 / SAMPLES as f64)
+            .collect();
+        let values = time
+            .iter()
+            .map(|at| (std::f64::consts::TAU * TONE_HERTZ * at).sin())
+            .collect();
+        let mut primary = View::new(
+            "transient",
+            TIME,
+            vec![Channel::new("tone", 0, VOLTAGE, time, values)],
+            vec![vec![0]],
+            &[],
+        );
+        assert_eq!(primary.show_harmonics, None);
+        assert!(primary.set_harmonics(true).is_err());
+        assert!(
+            serde_json::to_value(primary.state(&[true]))
+                .unwrap()
+                .get("harmonics")
+                .is_none()
+        );
+        let mut spectrum = primary.spectrum(&[true]).unwrap();
+        assert_eq!(spectrum.show_harmonics, Some(false));
+        let fundamental = spectrum.markers(&[true]);
+        assert_eq!(fundamental.len(), 1);
+        assert_eq!(spectrum.harmonic_markers.len(), 7);
+        let noise_floor = spectrum.horizontal_markers.clone();
+        assert_eq!(
+            spectrum.command(Action::Harmonics { shown: true }),
+            Command::Harmonics { shown: true }
+        );
+        spectrum.set_harmonics(true).unwrap();
+        assert_eq!(spectrum.state(&[true]).harmonics, Some(true));
+        let markers = spectrum.markers(&[true]);
+        assert_eq!(markers.len(), 8);
+        assert_eq!(markers[0], fundamental[0]);
+        for (harmonic, marker) in (2..=8).zip(&markers[1..]) {
+            assert_eq!(marker.2, format!("{harmonic}f"));
+        }
+        spectrum.zoom_x([1.0, 100.0]).unwrap();
+        spectrum.set_cursors(Some(10.0), Some(20.0)).unwrap();
+        spectrum.fit(&[true]);
+        assert_eq!(spectrum.show_harmonics, Some(true));
+        for refit in [false, true] {
+            spectrum.replace(
+                primary.spectrum(&[true]).unwrap(),
+                &[true],
+                refit,
+            );
+            assert_eq!(spectrum.show_harmonics, Some(true));
+            assert_eq!(spectrum.markers(&[true]), markers);
+        }
+        spectrum.set_harmonics(false).unwrap();
+        assert_eq!(spectrum.markers(&[true]), fundamental);
+        assert_eq!(spectrum.horizontal_markers, noise_floor);
+        spectrum.replace(primary.spectrum(&[true]).unwrap(), &[true], false);
+        assert_eq!(spectrum.show_harmonics, Some(false));
+        assert_eq!(spectrum.markers(&[true]), fundamental);
     }
 
     #[test]

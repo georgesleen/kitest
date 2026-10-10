@@ -55,9 +55,11 @@ name retains the selected instrument when possible.
   resamples the primary view's visible time interval, removes its resampled
   mean, and applies a periodic Hann window with amplitude correction. Its
   sample count is the next power of two of the interval's original point count,
-  clamped to 256 through 65,536. DC is omitted. Markers show the dominant tone,
-  harmonics through `8f` within bandwidth, and the median non-DC-bin noise floor.
-  This noise floor is a bin-amplitude statistic, not a spectral density.
+  clamped to 256 through 65,536. DC is omitted. Markers show the dominant tone
+  and the median non-DC-bin noise floor. Harmonic guides `2f` through `8f` within
+  bandwidth are hidden by default; enable **Show harmonics** in the pane's
+  right-click menu. This noise floor is a bin-amplitude statistic, not a spectral
+  density.
   A trace with no usable data in that time interval is omitted from the derived
   spectrum, without discarding other valid traces; a later rebuild can recover it.
 - **Primary / AC:** Bode magnitude in dB and unwrapped phase in degrees against
@@ -112,7 +114,10 @@ set a menu trigger.
 The command modifier is Command on platforms that use it instead of Ctrl.
 Right-click a pane for each channel's **Move to a new pane** (when the pane
 holds multiple channels), **Move to pane N** (only panes of the same quantity),
-and **Measurements** checkboxes. Empty panes disappear after moves. Menu pane
+and **Measurements** checkboxes. Spectrum panes also offer **Show harmonics**,
+which toggles harmonic guides across the spectrum while leaving the dominant
+tone and expectation guides visible. The choice survives zoom, pan, and derived
+view rebuilds. Empty panes disappear after moves. Menu pane
 numbers start at 1; socket pane indices start at 0. Measurements are printed
 for each shown channel below its pane. Cursor readouts include B minus A for
 each channel, time separation and reciprocal separation on waveforms, or B/A
@@ -270,6 +275,7 @@ positional arrays. `state` and `fit` accept absent, null, or empty-object params
 | `cursors` | optional `a`, `b` | Place cursors; missing or null removes that cursor. |
 | `measure` | `trace`, `measurements`, optional `quantity`, `over`: `[from,to]` | Return measurements over explicit range, cursor range, or visible range. |
 | `measurements` | `pane`, `measurements` | Set the pane's measurement strip. |
+| `harmonics` | `shown`: boolean | Show/hide `2f` through `8f` guides in Spectrum; refused on other instruments. |
 | `move` | `trace`, optional `quantity`, `to` | Move a channel to a zero-based pane; omitted/null `to` creates a new pane. |
 | `reference` | optional `trace` | Set Bode reference; omitted/null restores absolute responses. |
 | `trigger` | optional `trace`, `edge`: `rising` (default) or `falling`, `level` | Set transient trigger in volts; missing level uses primary cursor A; missing trace clears. |
@@ -287,6 +293,8 @@ value is an array of positions. `save` returns `{path}`. State contains `path`,
 `capture`, selected `view`, available `views`, trace names and visibility, and
 `plot`. Plot state includes `kind`, x axis, panes (y axes, shown channels,
 measurements), cursors, trigger, reference, annotations, and expectations.
+Spectrum plot state also includes `harmonics`, the **Show harmonics** checkbox
+value; it is false by default and absent on other instruments.
 Axis records contain `quantity`, `unit`, `log`, and a real-unit `range`.
 
 JSON-RPC errors use `-32700` for malformed JSON, `-32600` for invalid requests,

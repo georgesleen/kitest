@@ -27,6 +27,7 @@ pub(super) struct Shared<'v> {
     pub panes: &'v [Quantity],
     pub expectations: &'v [kitest_scope::Expectation],
     pub horizontal_markers: &'v [(usize, f64, String)],
+    pub show_harmonics: Option<bool>,
 }
 
 /// A change a pane asks its view to make, in plot coordinates.
@@ -41,6 +42,8 @@ pub(super) enum Action {
         pane: usize,
         measurements: Vec<Measurement>,
     },
+    /// Show or hide the spectrum's harmonic guides.
+    Harmonics { shown: bool },
     /// Show `x` on the shared x axis and `y` on pane `pane`.
     Zoom {
         pane: usize,
@@ -567,7 +570,7 @@ impl Pane {
             });
     }
 
-    /// The right-click menu: move a channel to another pane, and pick measurements.
+    /// The right-click menu: layout, measurements, and spectrum guides.
     fn menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -617,6 +620,11 @@ impl Pane {
                 }
             }
         });
+        if let Some(mut on) = shared.show_harmonics
+            && ui.checkbox(&mut on, "Show harmonics").changed()
+        {
+            actions.push(Action::Harmonics { shown: on });
+        }
         if ui.button("Fit").clicked() {
             actions.push(Action::Fit);
             ui.close();
