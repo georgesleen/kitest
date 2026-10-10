@@ -26,7 +26,7 @@ pub(super) struct Link {
     pub hover: Option<f64>,
     pub a: Option<f64>,
     pub b: Option<f64>,
-    pub markers: Vec<(usize, f64)>,
+    pub markers: Vec<(usize, f64, String)>,
 }
 
 impl Link {
@@ -48,7 +48,7 @@ pub struct View {
     reference: Vec<Channel>,
     panes: Vec<Pane>,
     expectations: Vec<kitest_scope::Expectation>,
-    fixed_markers: Vec<(usize, f64)>,
+    fixed_markers: Vec<(usize, f64, String)>,
     horizontal_markers: Vec<(usize, f64, String)>,
     reference_trace: Option<usize>,
     annotations: Vec<String>,
@@ -198,7 +198,12 @@ impl View {
                 for harmonic in 1..=8 {
                     let hertz = tone.hertz * harmonic as f64;
                     if hertz <= 10f64.powf(*x.last()?) {
-                        markers.push((channel.trace, hertz.log10()));
+                        let label = if harmonic == 1 {
+                            frequency.reading(hertz.log10(), 0.0)
+                        } else {
+                            format!("{harmonic}f")
+                        };
+                        markers.push((channel.trace, hertz.log10(), label));
                     }
                 }
             }
@@ -437,7 +442,7 @@ impl View {
             if let Some((at, margin)) =
                 kitest_measure::gain_margin(magnitude.curve(), phase.curve())
             {
-                self.fixed_markers.push((trace, at));
+                self.fixed_markers.push((trace, at, "GM".to_owned()));
                 self.annotations.push(format!(
                     "{} gain margin {:.2} dB at {}",
                     magnitude.name,
@@ -448,7 +453,7 @@ impl View {
             if let Some((at, margin)) =
                 kitest_measure::phase_margin(magnitude.curve(), phase.curve())
             {
-                self.fixed_markers.push((trace, at));
+                self.fixed_markers.push((trace, at, "PM".to_owned()));
                 self.annotations.push(format!(
                     "{} phase margin {:.2} deg at {}",
                     magnitude.name,
@@ -541,7 +546,7 @@ impl View {
     }
 
     /// Where the -3 dB measurement of each shown channel places a marker.
-    fn markers(&self, shown: &[bool]) -> Vec<(usize, f64)> {
+    fn markers(&self, shown: &[bool]) -> Vec<(usize, f64, String)> {
         let over = self.link.over();
         let mut markers = self.fixed_markers.clone();
         for pane in self
@@ -553,8 +558,13 @@ impl View {
                 if let Some(Value::Positions(points)) =
                     Measurement::HalfPower.of(channel.curve(), over.clone())
                 {
-                    markers
-                        .extend(points.into_iter().map(|x| (channel.trace, x)));
+                    markers.extend(points.into_iter().map(|x| {
+                        let label = self
+                            .link
+                            .quantity
+                            .reading(x, self.link.x.grid_spacing());
+                        (channel.trace, x, label)
+                    }));
                 }
             }
         }

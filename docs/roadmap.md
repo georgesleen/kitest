@@ -151,7 +151,11 @@ Done:
   scope; `--sketch` keeps the terminal view. Rust and Python can
   explicitly attach a `Check` to a capture and save it.
 - A Hann-windowed spectrum of the visible time window, in dBV, with the
-  dominant tone and its harmonics marked.
+  dominant tone, its harmonics, and the noise floor marked.
+- `oscillates()` takes an optional `min_swing=` and `max_thd=`, each
+  judged and drawn on its own: swing limits on the waveform, a
+  distortion limit on the spectrum. A capture whose checks are all
+  spectral opens on the spectrum.
 - Bode transfer functions against a selected reference trace, gain and
   phase margin, and group delay.
 - An optional trace, level, and edge trigger that aligns re-runs to time
@@ -165,7 +169,11 @@ One window, live:
 
 Instruments:
 - Oscilloscope: overshoot against the test's target.
-- Spectrum analyser: a noise-floor line and peak and harmonic labels.
+- Filters: `lowpass()` and `highpass()` checks driven from an input net,
+  drawn on the Bode view.
+- Control: a JSON command protocol on the live window's socket, and
+  measurements from a capture file without a window, so a script or an
+  agent can drive and read the scope.
 - VNA: Smith and polar charts once a port or impedance probe exists.
 
 ## Reference design

@@ -202,58 +202,6 @@ impl Pane {
             }
             plot_ui.set_plot_bounds_x(link.x.range());
             plot_ui.set_plot_bounds_y(self.y.range());
-            for expectation in
-                shared.expectations.iter().filter(|expectation| {
-                    self.channels.iter().any(|&index| {
-                        let channel = &shared.channels[index];
-                        channel.name == expectation.trace
-                            && shared
-                                .shown
-                                .get(channel.trace)
-                                .copied()
-                                .unwrap_or(false)
-                    })
-                })
-            {
-                let (start, end, low, high) = match expectation.region {
-                    kitest_scope::Region::Band {
-                        start,
-                        end,
-                        low,
-                        high,
-                    } => (start, end, low, high),
-                    kitest_scope::Region::Frequency { low, high }
-                        if x.log && low > 0.0 && high > low =>
-                    {
-                        (
-                            low.log10(),
-                            high.log10(),
-                            *self.y.range().start(),
-                            *self.y.range().end(),
-                        )
-                    }
-                    _ => continue,
-                };
-                let tint = if expectation.passed {
-                    egui::Color32::GREEN
-                } else {
-                    egui::Color32::RED
-                };
-                plot_ui.polygon(
-                    Polygon::new(
-                        "",
-                        PlotPoints::new(vec![
-                            [start, low],
-                            [end, low],
-                            [end, high],
-                            [start, high],
-                        ]),
-                    )
-                    .stroke(Stroke::new(1.0, tint))
-                    .style(LineStyle::dashed_dense())
-                    .fill_color(tint.gamma_multiply(0.12)),
-                );
-            }
             for reference in shared.reference.iter().filter(|reference| {
                 self.channels.iter().any(|&index| {
                     let current = &shared.channels[index];
@@ -286,17 +234,131 @@ impl Pane {
                         .width(1.5),
                 );
             }
-            for &(trace, at) in &link.markers {
-                if shared.shown.get(trace).copied().unwrap_or(false) {
+            for expectation in
+                shared.expectations.iter().filter(|expectation| {
+                    self.channels.iter().any(|&index| {
+                        let channel = &shared.channels[index];
+                        channel.name == expectation.trace
+                            && shared
+                                .shown
+                                .get(channel.trace)
+                                .copied()
+                                .unwrap_or(false)
+                    })
+                })
+            {
+                if expectation.region.is_spectral() != x.log {
+                    continue;
+                }
+                let tint = if expectation.passed {
+                    egui::Color32::GREEN
+                } else {
+                    egui::Color32::RED
+                };
+                let limit = |plot_ui: &mut PlotUi<'_>,
+                             y: f64,
+                             from: f64,
+                             to: f64,
+                             label: &str| {
+                    plot_ui.line(
+                        Line::new(
+                            "",
+                            PlotPoints::new(vec![[from, y], [to, y]]),
+                        )
+                        .color(tint)
+                        .width(2.0),
+                    );
+                    plot_ui.text(
+                        Text::new("", PlotPoint::new(from, y), label)
+                            .color(tint)
+                            .anchor(Align2::LEFT_BOTTOM),
+                    );
+                };
+                let (start, end, low, high) = match expectation.region {
+                    kitest_scope::Region::Band {
+                        start,
+                        end,
+                        low,
+                        high,
+                    } => (start, end, low, high),
+                    kitest_scope::Region::Frequency { low, high }
+                        if low > 0.0 && high > low =>
+                    {
+                        (
+                            low.log10(),
+                            high.log10(),
+                            *self.y.range().start(),
+                            *self.y.range().end(),
+                        )
+                    }
+                    kitest_scope::Region::Swing {
+                        start,
+                        end,
+                        centre,
+                        minimum,
+                    } => {
+                        limit(
+                            plot_ui,
+                            centre + minimum,
+                            start,
+                            end,
+                            "min swing",
+                        );
+                        limit(
+                            plot_ui,
+                            centre - minimum,
+                            start,
+                            end,
+                            "min swing",
+                        );
+                        continue;
+                    }
+                    kitest_scope::Region::Distortion {
+                        fundamental,
+                        amplitude,
+                        maximum,
+                    } if self.quantity.name == "spectrum"
+                        && fundamental > 0.0
+                        && amplitude * maximum > 0.0 =>
+                    {
+                        let level = 20.0 * (amplitude * maximum).log10();
+                        let from = (1.5 * fundamental).log10();
+                        limit(
+                            plot_ui,
+                            level,
+                            from,
+                            *link.x.range().end(),
+                            "THD limit",
+                        );
+                        continue;
+                    }
+                    _ => continue,
+                };
+                plot_ui.polygon(
+                    Polygon::new(
+                        "",
+                        PlotPoints::new(vec![
+                            [start, low],
+                            [end, low],
+                            [end, high],
+                            [start, high],
+                        ]),
+                    )
+                    .stroke(Stroke::new(1.0, tint))
+                    .style(LineStyle::dashed_dense())
+                    .fill_color(tint.gamma_multiply(0.12)),
+                );
+            }
+            for (trace, at, label) in &link.markers {
+                if shared.shown.get(*trace).copied().unwrap_or(false) {
                     plot_ui.vline(
-                        VLine::new("", at)
-                            .color(color(trace))
+                        VLine::new("", *at)
+                            .color(color(*trace))
                             .style(LineStyle::dashed_dense()),
                     );
-                    let label = x.reading(at, x_spacing);
                     plot_ui.text(
-                        Text::new("", PlotPoint::new(at, top), label)
-                            .color(color(trace))
+                        Text::new("", PlotPoint::new(*at, top), label.as_str())
+                            .color(color(*trace))
                             .anchor(Align2::LEFT_TOP),
                     );
                 }

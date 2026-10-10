@@ -439,12 +439,13 @@ impl PyCapture {
                 "capture has no trace {trace}"
             )));
         }
-        let Some(expectation) = check.inner.expectation(trace) else {
+        let expectations = check.inner.expectations(trace);
+        if expectations.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "check has no region to draw",
             ));
-        };
-        self.inner.expectations.push(expectation);
+        }
+        self.inner.expectations.extend(expectations);
         Ok(())
     }
 

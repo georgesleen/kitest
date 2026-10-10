@@ -87,15 +87,46 @@ impl Spectrum {
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(b.1))?;
-        if peak <= f64::EPSILON {
+        (peak > f64::EPSILON).then(|| self.tone(bin))
+    }
+
+    /// The strongest sinusoid within a bin of `hertz`, or `None` when `hertz`
+    /// lies beyond the spectrum.
+    pub fn tone_near(&self, hertz: f64) -> Option<Tone> {
+        let centre = (hertz / self.bin_width).round() as usize;
+        let last = self.raw.len().checked_sub(1)?;
+        if centre > last {
             return None;
         }
+        let bin = (centre.saturating_sub(1)..=(centre + 1).min(last))
+            .max_by(|&a, &b| self.raw[a].total_cmp(&self.raw[b]))?;
+        Some(self.tone(bin))
+    }
+
+    /// The total harmonic distortion: the root sum square of harmonics 2 to
+    /// `harmonics` over the fundamental, which is the dominant tone.
+    ///
+    /// Harmonics beyond the spectrum are left out. Returns `None` for a
+    /// spectrum with no tone.
+    pub fn total_harmonic_distortion(&self, harmonics: usize) -> Option<f64> {
+        let fundamental = self.dominant()?;
+        let power: f64 = (2..=harmonics)
+            .map_while(|harmonic| {
+                self.tone_near(fundamental.hertz * harmonic as f64)
+            })
+            .map(|tone| tone.amplitude * tone.amplitude)
+            .sum();
+        Some(power.sqrt() / fundamental.amplitude)
+    }
+
+    /// The tone at `bin`, refined between its neighbours.
+    fn tone(&self, bin: usize) -> Tone {
         let offset = self.parabolic_offset(bin);
         let gain = coherent_gain() * hann_lobe(offset);
-        Some(Tone {
+        Tone {
             hertz: (bin as f64 + offset) * self.bin_width,
-            amplitude: 2.0 * peak / (self.samples as f64 * gain),
-        })
+            amplitude: 2.0 * self.raw[bin] / (self.samples as f64 * gain),
+        }
     }
 
     /// The median amplitude of every non-DC bin.
@@ -114,7 +145,8 @@ impl Spectrum {
         }
     }
 
-    /// Sub-bin position of the peak at `bin`, from its two neighbours.
+    /// Sub-bin position of the peak at `bin`, from its two neighbours, within
+    /// half a bin.
     fn parabolic_offset(&self, bin: usize) -> f64 {
         if bin == 0 || bin + 1 >= self.raw.len() {
             return 0.0;
@@ -126,10 +158,10 @@ impl Spectrum {
         }
         let (a, b, g) = (left.log10(), peak.log10(), right.log10());
         let curvature = a - 2.0 * b + g;
-        if curvature == 0.0 {
+        if curvature >= 0.0 {
             0.0
         } else {
-            0.5 * (a - g) / curvature
+            (0.5 * (a - g) / curvature).clamp(-0.5, 0.5)
         }
     }
 }
@@ -204,5 +236,59 @@ mod tests {
             .spectrum(0.1..=0.2, 1024)
             .unwrap();
         assert!((spectrum.dominant().unwrap().hertz - 1500.0).abs() < 2.0);
+    }
+
+    fn spectrum_of(harmonics: &[(f64, f64)]) -> super::Spectrum {
+        let samples = 4096;
+        let time: Vec<f64> =
+            (0..samples).map(|index| index as f64 / 100_000.0).collect();
+        let values: Vec<f64> = time
+            .iter()
+            .map(|time| {
+                harmonics
+                    .iter()
+                    .map(|(order, amplitude)| {
+                        amplitude * (2.0 * PI * 997.0 * order * time).sin()
+                    })
+                    .sum()
+            })
+            .collect();
+        Curve::new(&time, &values)
+            .spectrum(time[0]..=time[samples - 1], samples)
+            .unwrap()
+    }
+
+    #[test]
+    fn distortion_is_the_root_sum_square_of_the_harmonics_over_the_fundamental()
+    {
+        let thd = spectrum_of(&[(1.0, 2.0), (2.0, 0.2), (3.0, 0.1)])
+            .total_harmonic_distortion(10)
+            .unwrap();
+        let expected = (0.1f64.powi(2) + 0.05f64.powi(2)).sqrt();
+        assert!((thd - expected).abs() / expected < 0.02, "{thd}");
+    }
+
+    #[test]
+    fn a_square_wave_counts_only_the_harmonics_asked_for() {
+        let odd: Vec<(f64, f64)> = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+            .iter()
+            .map(|&k| (k, 1.0 / k))
+            .collect();
+        let spectrum = spectrum_of(&odd);
+        let nine = spectrum.total_harmonic_distortion(9).unwrap();
+        let expected = [3.0, 5.0, 7.0, 9.0]
+            .iter()
+            .map(|k: &f64| 1.0 / (k * k))
+            .sum::<f64>()
+            .sqrt();
+        assert!((nine - expected).abs() / expected < 0.02, "{nine}");
+    }
+
+    #[test]
+    fn a_pure_sine_has_no_distortion() {
+        let thd = spectrum_of(&[(1.0, 1.0)])
+            .total_harmonic_distortion(10)
+            .unwrap();
+        assert!(thd < 1e-4, "{thd}");
     }
 }

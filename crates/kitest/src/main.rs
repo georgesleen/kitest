@@ -155,12 +155,10 @@ fn write_captures<'a>(
             },
         );
         capture.corner = corner(outcome);
-        if let Some(expectation) = outcome
-            .check
-            .as_ref()
-            .and_then(|check| check.expectation(&outcome.net))
-        {
-            capture.expectations.push(expectation);
+        if let Some(check) = &outcome.check {
+            capture
+                .expectations
+                .extend(check.expectations(&outcome.net));
         }
         let path = directory.join(capture.file_name());
         capture

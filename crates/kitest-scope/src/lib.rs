@@ -81,6 +81,28 @@ pub enum Region {
     },
     /// A dominant frequency between `low` and `high` hertz.
     Frequency { low: f64, high: f64 },
+    /// A swing of at least `minimum` either side of `centre` from `start` to
+    /// `end` on the capture's axis.
+    Swing {
+        start: f64,
+        end: f64,
+        centre: f64,
+        minimum: f64,
+    },
+    /// Harmonics of a `fundamental` in hertz, of `amplitude` zero to peak,
+    /// summing to at most `maximum` of it.
+    Distortion {
+        fundamental: f64,
+        amplitude: f64,
+        maximum: f64,
+    },
+}
+
+impl Region {
+    /// Whether the region lies on a frequency axis rather than the capture's own.
+    pub fn is_spectral(&self) -> bool {
+        matches!(self, Self::Frequency { .. } | Self::Distortion { .. })
+    }
 }
 
 /// A scope file's version alone.

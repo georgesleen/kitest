@@ -330,15 +330,15 @@ fn family_capture(captures: &[Capture]) -> Capture {
     }
 }
 
-/// The instrument an expectation selects when a capture first opens.
+/// The instrument a capture opens in: the spectrum when every expectation
+/// lies on a frequency axis.
 fn initial_derived(capture: &Capture) -> Option<Derived> {
-    let frequency = capture.expectations.iter().any(|expectation| {
-        matches!(expectation.region, kitest_scope::Region::Frequency { .. })
-    });
-    let band = capture.expectations.iter().any(|expectation| {
-        matches!(expectation.region, kitest_scope::Region::Band { .. })
-    });
-    (frequency && !band).then_some(Derived::Spectrum)
+    let spectral = !capture.expectations.is_empty()
+        && capture
+            .expectations
+            .iter()
+            .all(|expectation| expectation.region.is_spectral());
+    spectral.then_some(Derived::Spectrum)
 }
 
 /// `path`'s file name, or its display when it has none.

@@ -5,7 +5,11 @@ mod expect;
 
 pub use expect::{ExpectError, Expectation, parse as parse_expectation};
 
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+
+use kitest_measure::Curve;
+use kitest_scope::Region;
 
 use crate::analysis::si;
 use crate::kicad::{is_ground, is_spice_ground, node_name};
@@ -37,6 +41,17 @@ const SIZED_KICK_VOLTS: f64 = 0.2;
 const KICK_STEP_CYCLES: f64 = 0.1;
 /// Prefixes of the names KiCad gives nets no label names.
 const AUTO_NET_PREFIXES: [&str; 2] = ["Net-(", "unconnected-("];
+/// Harmonics, the fundamental counted as the first, that distortion sums.
+const HARMONICS: usize = 10;
+
+/// What an oscillation check asks of a net beyond its frequency.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    /// The least swing, half the peak-to-peak voltage, in volts.
+    min_swing: Option<f64>,
+    /// The most total harmonic distortion, as a fraction of the fundamental.
+    max_thd: Option<f64>,
+}
 
 /// One probe's result at one corner.
 #[derive(Debug, Clone, PartialEq)]
@@ -255,7 +270,12 @@ fn check_corner<B: Backend>(
                 };
                 (Some(check), None)
             }
-            Some(Expectation::Oscillates { near, within }) => match crystal {
+            Some(Expectation::Oscillates {
+                near,
+                within,
+                min_swing,
+                max_thd,
+            }) => match crystal {
                 Some(crystal) => (Some(crystal_unsupported(crystal)), None),
                 None => {
                     let (check, waveform) = oscillation(
@@ -263,19 +283,10 @@ fn check_corner<B: Backend>(
                         &netlist.text,
                         corner.tran_sources(),
                         probe.net(),
-                        near,
-                        within,
+                        (near, within),
+                        Limits { min_swing, max_thd },
                     )?;
-                    let band = within.band(near);
-                    (
-                        Some(check.with_region(
-                            kitest_scope::Region::Frequency {
-                                low: near - band,
-                                high: near + band,
-                            },
-                        )),
-                        waveform,
-                    )
+                    (Some(check), waveform)
                 }
             },
         };
@@ -306,7 +317,8 @@ fn check_corner<B: Backend>(
     Ok(outcomes)
 }
 
-/// Whether `net` sustains an oscillation within `within` of `near` hertz.
+/// Whether `net` sustains an oscillation within `within` of `near` hertz,
+/// given as `(near, within)`, and meets `limits`.
 ///
 /// The net is kicked at the start, so startup does not hang on numerical
 /// noise, and the run lengthens until the amplitude is steady. A steady
@@ -318,8 +330,8 @@ fn oscillation<B: Backend>(
     netlist: &str,
     sources: Vec<TranSource>,
     net: &Net,
-    near: f64,
-    within: Tolerance,
+    (near, within): (f64, Tolerance),
+    limits: Limits,
 ) -> Result<(Check, Option<Waveform>), B::Error> {
     let node = node_name(&net.name);
     let mut amps = KICK_AMPS;
@@ -347,7 +359,9 @@ fn oscillation<B: Backend>(
             return Ok((missing(net), None));
         };
         let envelope = Envelope::measure(&signal, near);
-        if let Some(check) = envelope.verdict(cycles, near, within, &signal) {
+        if let Some(check) =
+            envelope.verdict(cycles, (near, within), limits, &signal)
+        {
             return Ok((check, waveform(result, net, near)));
         }
         last = Some((envelope, result));
@@ -372,7 +386,87 @@ fn oscillation<B: Backend>(
             )
         },
     );
-    Ok((check, waveform(result, net, near)))
+    Ok((
+        check.with_region(frequency_region(near, within)),
+        waveform(result, net, near),
+    ))
+}
+
+/// The frequencies `within` of `near` hertz.
+fn frequency_region(near: f64, within: Tolerance) -> Region {
+    let band = within.band(near);
+    Region::Frequency {
+        low: near - band,
+        high: near + band,
+    }
+}
+
+/// Whether `curve` swings at least `minimum` volts either side of its
+/// centre over `over`.
+fn swing(curve: Curve<'_>, over: RangeInclusive<f64>, minimum: f64) -> Check {
+    let low = curve.min(over.clone()).unwrap_or(0.0);
+    let high = curve.max(over.clone()).unwrap_or(0.0);
+    let (swing, centre) = ((high - low) / 2.0, (high + low) / 2.0);
+    let passed = swing >= minimum;
+    Check::new(
+        passed,
+        format!(
+            "swings {} either side of {}, {} the {} minimum",
+            si(swing, "V"),
+            si(centre, "V"),
+            if passed { "above" } else { "below" },
+            si(minimum, "V"),
+        ),
+    )
+    .with_region(Region::Swing {
+        start: *over.start(),
+        end: *over.end(),
+        centre,
+        minimum,
+    })
+}
+
+/// Whether `curve`'s total harmonic distortion over `over` is at most
+/// `maximum`, a fraction of its fundamental.
+fn distortion(
+    curve: Curve<'_>,
+    over: RangeInclusive<f64>,
+    maximum: f64,
+) -> Check {
+    let samples = curve.x().len().next_power_of_two();
+    let measured = curve.spectrum(over, samples).and_then(|spectrum| {
+        Some((
+            spectrum.dominant()?,
+            spectrum.total_harmonic_distortion(HARMONICS)?,
+        ))
+    });
+    let Some((fundamental, thd)) = measured else {
+        return Check::new(
+            false,
+            "has no tone to measure harmonic distortion against".to_owned(),
+        );
+    };
+    let passed = thd <= maximum;
+    Check::new(
+        passed,
+        format!(
+            "{} harmonic distortion, {} the {} maximum",
+            percent(thd),
+            if passed { "within" } else { "above" },
+            percent(maximum),
+        ),
+    )
+    .with_region(Region::Distortion {
+        fundamental: fundamental.hertz,
+        amplitude: fundamental.amplitude,
+        maximum,
+    })
+}
+
+/// `fraction` as a percentage with up to two decimals, such as `12.5%`.
+fn percent(fraction: f64) -> String {
+    let digits = format!("{:.2}", fraction * 100.0);
+    format!("{}%", digits.trim_end_matches('0').trim_end_matches('.'))
 }
 
 /// `net`'s waveform out of `result`, a run expecting `near` hertz.
@@ -440,11 +534,13 @@ impl Envelope {
     }
 
     /// The check this run settles, or `None` when a longer run is needed.
+    ///
+    /// The frequency is `within` of `near` hertz, given as `(near, within)`.
     fn verdict(
         &self,
         cycles: f64,
-        near: f64,
-        within: Tolerance,
+        (near, within): (f64, Tolerance),
+        limits: Limits,
         signal: &Signal<'_>,
     ) -> Option<Check> {
         let amplitude = self.amplitude();
@@ -458,15 +554,18 @@ impl Envelope {
             } else {
                 String::new()
             };
-            return Some(Check::new(
-                false,
-                format!(
-                    "no oscillation: {} amplitude after {cycles} cycles, below \
-                     the {} floor{decay}",
-                    si(amplitude, "V"),
-                    si(MIN_OSCILLATION_VOLTS, "V"),
-                ),
-            ));
+            return Some(
+                Check::new(
+                    false,
+                    format!(
+                        "no oscillation: {} amplitude after {cycles} cycles, \
+                         below the {} floor{decay}",
+                        si(amplitude, "V"),
+                        si(MIN_OSCILLATION_VOLTS, "V"),
+                    ),
+                )
+                .with_region(frequency_region(near, within)),
+            );
         }
         if !self.steady() {
             return None;
@@ -475,16 +574,28 @@ impl Envelope {
         let end = time.last().copied().unwrap_or(0.0);
         let start =
             time.partition_point(|t| *t < end - 2.0 * WINDOW_CYCLES / near);
-        let tone = Signal::new(&time[start..], &signal.values()[start..])
-            .dominant_tone();
+        let steady = Signal::new(&time[start..], &signal.values()[start..]);
+        let tone = steady.dominant_tone();
         let frequency =
             Check::near(tone.frequency().hertz(), near, within, "Hz");
-        Some(Check::new(
+        let frequency = Check::new(
             frequency.passed(),
             format!(
                 "{frequency}, at a steady {} amplitude",
                 si(amplitude, "V")
             ),
+        )
+        .with_region(frequency_region(near, within));
+        let curve = Curve::new(steady.time(), steady.values());
+        let over = time.get(start).copied().unwrap_or(end)..=end;
+        let swing = limits
+            .min_swing
+            .map(|minimum| swing(curve, over.clone(), minimum));
+        let distortion = limits
+            .max_thd
+            .map(|maximum| distortion(curve, over, maximum));
+        Some(Check::all(
+            [Some(frequency), swing, distortion].into_iter().flatten(),
         ))
     }
 }
@@ -569,6 +680,10 @@ mod tests {
     use super::*;
 
     const TANK: &str = include_str!("../../../../examples/spice/tank.cir");
+    const NO_LIMITS: Limits = Limits {
+        min_swing: None,
+        max_thd: None,
+    };
 
     fn tank_check(near: f64) -> Check {
         let net = Net {
@@ -580,8 +695,8 @@ mod tests {
             TANK,
             vec![TranSource::dc("vcc", 9.0)],
             &net,
-            near,
-            Tolerance::percent(5.0),
+            (near, Tolerance::percent(5.0)),
+            NO_LIMITS,
         )
         .expect("simulation ran")
         .0
@@ -617,8 +732,8 @@ mod tests {
         let signal = Signal::new(&time, &values);
         Envelope::measure(&signal, 1e6).verdict(
             200.0,
-            1e6,
-            Tolerance::percent(1.0),
+            (1e6, Tolerance::percent(1.0)),
+            NO_LIMITS,
             &signal,
         )
     }
@@ -633,6 +748,62 @@ mod tests {
     fn a_growing_or_slowly_decaying_envelope_needs_a_longer_run() {
         assert_eq!(verdict(1.05), None);
         assert_eq!(verdict(0.95), None);
+    }
+
+    #[test]
+    fn swing_and_distortion_are_each_judged_and_drawn_on_their_own() {
+        let (time, sine) = sine(1.0, 200.0);
+        let values: Vec<f64> = time
+            .iter()
+            .zip(&sine)
+            .map(|(t, v)| {
+                2.0 + v + 0.1 * (2.0 * std::f64::consts::TAU * 1e6 * t).sin()
+            })
+            .collect();
+        let signal = Signal::new(&time, &values);
+        let check = |min_swing, max_thd| {
+            Envelope::measure(&signal, 1e6)
+                .verdict(
+                    200.0,
+                    (1e6, Tolerance::percent(1.0)),
+                    Limits { min_swing, max_thd },
+                    &signal,
+                )
+                .expect("steady")
+        };
+
+        let loose = check(Some(0.9), Some(0.2));
+        assert!(loose.passed(), "{loose}");
+        let tight = check(Some(1.5), Some(0.05));
+        assert!(!tight.passed(), "{tight}");
+        let verdicts: Vec<(bool, &str)> = tight
+            .expectations("out")
+            .iter()
+            .map(|expectation| {
+                let kind = match expectation.region {
+                    Region::Frequency { .. } => "frequency",
+                    Region::Swing { .. } => "swing",
+                    Region::Distortion { .. } => "distortion",
+                    Region::Band { .. } => "band",
+                };
+                (expectation.passed, kind)
+            })
+            .collect();
+        assert_eq!(
+            verdicts,
+            [(true, "frequency"), (false, "swing"), (false, "distortion")]
+        );
+        assert!(
+            tight
+                .message()
+                .contains("harmonic distortion, above the 5% maximum"),
+            "{tight}"
+        );
+        let Region::Swing { centre, .. } = tight.expectations("out")[1].region
+        else {
+            unreachable!("the second part is the swing")
+        };
+        assert!((centre - 2.0).abs() < 0.05, "{centre}");
     }
 
     /// Ngspice, recording each kick's current and the step it caused on `n`.
@@ -697,8 +868,8 @@ mod tests {
             "* high impedance tank\nl1 n 0 1m\nc1 n 0 10p\nr1 n 0 1meg\n",
             Vec::new(),
             &net,
-            hertz,
-            Tolerance::percent(5.0),
+            (hertz, Tolerance::percent(5.0)),
+            NO_LIMITS,
         )
         .expect("simulation ran");
         let kicks = backend.kicks.borrow();

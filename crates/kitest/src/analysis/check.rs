@@ -12,7 +12,15 @@ use super::{Signal, Tolerance};
 pub struct Check {
     passed: bool,
     message: String,
-    region: Option<Region>,
+    regions: Vec<Part>,
+}
+
+/// One part of a check, with the region it holds a trace to.
+#[derive(Debug, Clone, PartialEq)]
+struct Part {
+    region: Region,
+    passed: bool,
+    message: String,
 }
 
 impl Check {
@@ -21,8 +29,23 @@ impl Check {
         Self {
             passed,
             message,
-            region: None,
+            regions: Vec::new(),
         }
+    }
+
+    /// A check that passes when every one of `checks` passes, with their
+    /// messages and regions in order.
+    pub fn all(checks: impl IntoIterator<Item = Check>) -> Self {
+        let mut all = Self::new(true, String::new());
+        for check in checks {
+            all.passed &= check.passed;
+            if !all.message.is_empty() {
+                all.message.push_str("; ");
+            }
+            all.message.push_str(&check.message);
+            all.regions.extend(check.regions);
+        }
+        all
     }
 
     /// Whether `measured` is within `tolerance` of `expected`, in `unit`.
@@ -104,21 +127,28 @@ impl Check {
         &self.message
     }
 
-    /// Sets where the check holds the trace.
+    /// Adds where the check holds the trace.
     pub fn with_region(mut self, region: Region) -> Self {
-        self.region = Some(region);
+        self.regions.push(Part {
+            region,
+            passed: self.passed,
+            message: self.message.clone(),
+        });
         self
     }
 
-    /// The expectation to draw on `trace`, or `None` when the check has no
-    /// region on a capture.
-    pub fn expectation(&self, trace: &str) -> Option<Expectation> {
-        Some(Expectation {
-            trace: trace.to_owned(),
-            passed: self.passed,
-            message: self.message.clone(),
-            region: self.region?,
-        })
+    /// The expectations to draw on `trace`, one per region, each with its own
+    /// verdict; empty when the check holds no region.
+    pub fn expectations(&self, trace: &str) -> Vec<Expectation> {
+        self.regions
+            .iter()
+            .map(|part| Expectation {
+                trace: trace.to_owned(),
+                passed: part.passed,
+                message: part.message.clone(),
+                region: part.region,
+            })
+            .collect()
     }
 }
 
@@ -181,7 +211,7 @@ mod tests {
             Tolerance::abs(0.05),
             2.0,
         );
-        let expectation = check.expectation("out").unwrap();
+        let [expectation] = check.expectations("out").try_into().unwrap();
         assert!(expectation.passed);
         assert_eq!(expectation.trace, "out");
         assert_eq!(
@@ -193,5 +223,29 @@ mod tests {
                 high: 1.05,
             }
         );
+    }
+
+    #[test]
+    fn all_keeps_each_parts_own_verdict_and_region() {
+        let frequency = Region::Frequency {
+            low: 9.0,
+            high: 11.0,
+        };
+        let distortion = Region::Distortion {
+            fundamental: 10.0,
+            amplitude: 1.0,
+            maximum: 0.05,
+        };
+        let check = Check::all([
+            Check::new(true, "in band".into()).with_region(frequency),
+            Check::new(false, "too distorted".into()).with_region(distortion),
+        ]);
+        assert!(!check.passed());
+        assert_eq!(check.message(), "in band; too distorted");
+        let expectations = check.expectations("out");
+        assert_eq!(expectations.len(), 2);
+        assert!(expectations[0].passed && !expectations[1].passed);
+        assert_eq!(expectations[1].message, "too distorted");
+        assert_eq!(expectations[1].region, distortion);
     }
 }
