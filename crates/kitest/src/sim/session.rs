@@ -1,7 +1,12 @@
 //! A live transient simulation, held open in an `ngspice -p` pipe.
 
 use std::io::{BufRead, BufReader, PipeReader, Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
+
+use rustix::fs::{Mode, OFlags};
+use rustix::pty::OpenptFlags;
 
 use tempfile::TempDir;
 
@@ -22,6 +27,9 @@ const SYNC: &str = "kitest-sync";
 
 /// Prefix for the element names of drives, kept distinct from the design's own.
 const DRIVE_PREFIX: &str = "vktdrive";
+
+/// The line ngspice prints at start when it has no X display.
+const NO_DISPLAY: &str = "ERROR: (external)  no graphics interface;";
 
 /// A voltage source that holds `node` against ground and that a session sets.
 #[derive(Debug, Clone)]
@@ -55,6 +63,7 @@ pub struct Session {
     resolution: f64,
     now: f64,
     started: bool,
+    _terminal: OwnedFd,
     _dir: TempDir,
 }
 
@@ -140,18 +149,33 @@ impl Ngspice {
             .map_err(SessionError::Io)?;
 
         let (reader, writer) = std::io::pipe().map_err(SessionError::Io)?;
+        let (terminal, follower) = terminal().map_err(SessionError::Io)?;
+        let follower_fd = follower.as_raw_fd();
         let mut child = {
             let mut command = Command::new(self.binary());
             command
                 .arg("-p")
                 .arg(&deck_path)
+                .env_remove("DISPLAY")
                 .stdin(Stdio::piped())
                 .stdout(writer.try_clone().map_err(SessionError::Io)?)
                 .stderr(writer);
+            // SAFETY: the hook makes only the setsid and ioctl system calls,
+            // which are async-signal-safe, on a descriptor open until spawn.
+            unsafe {
+                command.pre_exec(move || {
+                    rustix::process::setsid()?;
+                    rustix::process::ioctl_tiocsctty(BorrowedFd::borrow_raw(
+                        follower_fd,
+                    ))?;
+                    Ok(())
+                });
+            }
             command
                 .spawn()
                 .map_err(|source| spawn_error(self.binary(), source))?
         };
+        drop(follower);
         let stdin = child.stdin.take().expect("stdin is piped");
 
         let mut session = Session {
@@ -163,6 +187,7 @@ impl Ngspice {
             resolution: RESOLUTION * max_step,
             now: 0.0,
             started: false,
+            _terminal: terminal,
             _dir: dir,
         };
         session.exchange(&[
@@ -367,6 +392,23 @@ impl Drop for Session {
     }
 }
 
+/// A pseudo-terminal pair, for ngspice to hold the follower side as its
+/// controlling terminal.
+fn terminal() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let leader = rustix::pty::openpt(
+        OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC,
+    )?;
+    rustix::pty::grantpt(&leader)?;
+    rustix::pty::unlockpt(&leader)?;
+    let name = rustix::pty::ptsname(&leader, Vec::new())?;
+    let follower = rustix::fs::open(
+        name.as_c_str(),
+        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok((leader, follower))
+}
+
 /// The deck for a session: `netlist`, one source per drive, and the run.
 fn deck(netlist: &str, drives: &[Drive], stop: f64, max_step: f64) -> String {
     let mut deck = netlist.to_owned();
@@ -397,6 +439,9 @@ fn value(lines: &[String], expression: &str) -> Option<f64> {
 
 /// Whether an ngspice output line reports an error, a warning, or an abort.
 fn is_problem(line: &str) -> bool {
+    if line.starts_with(NO_DISPLAY) {
+        return false;
+    }
     let line = line.trim_start().to_lowercase();
     line.starts_with("error")
         || line.starts_with("warning")
@@ -447,6 +492,7 @@ mod tests {
         ));
         assert!(is_problem("run simulation(s) aborted"));
         assert!(!is_problem("doAnalyses: pause requested"));
+        assert!(!is_problem(&format!("{NO_DISPLAY}\n")));
     }
 
     #[test]

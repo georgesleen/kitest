@@ -99,7 +99,9 @@ the batch backend and does not replace it.
 - **Process.** One `ngspice -p` child per session, driven over a pipe. Sessions
   share no state, so they run in parallel. The deck file is the netlist, one DC
   voltage source per declared `Drive`, and a `.tran` with an explicit maximum
-  step.
+  step. The child runs without `DISPLAY` and holds a pseudo-terminal as its
+  controlling terminal, because ngspice with no controlling terminal and no X
+  display crashes before it reads a command.
 - **Time.** Virtual and monotonic; there is no rollback. `advance_to(t)` sets
   `stop when time = t`, which also places a solver breakpoint at `t`, so the
   run halts on `t` itself. The session checks the landed time against `t` to a

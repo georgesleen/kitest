@@ -303,6 +303,7 @@ dependencies = [
  "rand_distr",
  "realfft",
  "roxmltree",
+ "rustix",
  "serde",
  "tempfile",
  "thiserror",
