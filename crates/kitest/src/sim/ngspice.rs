@@ -70,6 +70,11 @@ impl Backend for Ngspice {
 }
 
 impl Ngspice {
+    /// The program this backend launches.
+    pub(super) fn binary(&self) -> &str {
+        &self.binary
+    }
+
     /// Run one `.control` directive and parse the raw file it writes.
     fn run_raw(
         &self,
@@ -103,7 +108,10 @@ impl Ngspice {
 }
 
 /// Classify a failure to launch the ngspice `program`.
-fn spawn_error(program: &str, source: std::io::Error) -> NgspiceError {
+pub(super) fn spawn_error(
+    program: &str,
+    source: std::io::Error,
+) -> NgspiceError {
     let program = program.to_owned();
     if source.kind() == std::io::ErrorKind::NotFound {
         NgspiceError::NotInstalled { program, source }

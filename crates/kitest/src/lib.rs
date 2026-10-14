@@ -26,5 +26,5 @@ pub use kicad::{
     VoltageOrigin, export_design, export_netlist,
 };
 pub use models::{ModelEntry, ModelError, ModelKind, ModelLibrary};
-pub use sim::{Backend, Ngspice, NgspiceError};
+pub use sim::{Backend, Drive, Ngspice, NgspiceError, Session, SessionError};
 pub use stimulus::{AcSupply, DcSupply, Pulse, Sin, TranSource};

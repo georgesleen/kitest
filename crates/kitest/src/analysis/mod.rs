@@ -114,6 +114,6 @@ impl Spectra {
 
 /// The result key for `node`: ngspice lowercases node names, and a schematic
 /// net name becomes its SPICE node the same way the netlist renames it.
-fn key(node: &str) -> String {
+pub(crate) fn key(node: &str) -> String {
     crate::kicad::node_name(node).to_lowercase()
 }

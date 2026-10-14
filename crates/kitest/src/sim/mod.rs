@@ -1,8 +1,10 @@
 //! The simulation backend seam.
 
 mod ngspice;
+mod session;
 
 pub use ngspice::{Ngspice, NgspiceError};
+pub use session::{Drive, Session, SessionError};
 
 use crate::{
     Ac, DcSupply, OperatingPoint, Spectra, Tran, TranSource, Transient,
