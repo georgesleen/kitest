@@ -12,6 +12,7 @@ kitest-scope = { version = "0.0.0", path = "../kitest-scope", default-features =
 num-complex = "0.4.6"
 realfft = "3.5.0"
 roxmltree = "0.21.1"
+rustix = { version = "1.1.4", features = ["fs", "process", "pty"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tempfile = "3.27.0"
 thiserror = "2"

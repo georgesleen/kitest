@@ -62,9 +62,9 @@ Single crate first, split only when forced (for example a pure publishable core,
 or to enforce a boundary). Module seams inside the crate mark the eventual splits.
 
 - `kitest` (Rust): the engine. The `Backend` trait, the ngspice batch (subprocess)
-  backend, the `kicad-cli` wrapper, boundary/port derivation and the slicer, and
-  the assertion primitives. An FFI backend and an Xyce backend can follow behind
-  the trait.
+  backend, the live ngspice session, the `kicad-cli` wrapper, boundary/port
+  derivation and the slicer, and the assertion primitives. An FFI backend and an
+  Xyce backend can follow behind the trait.
 - `kitest-py` (PyO3/maturin): the Python binding and the `import kitest` surface
   the testbenches use.
 
@@ -89,6 +89,51 @@ properties kitest relies on:
 - An `.include` of `Simulation_SPICE.sp` is added for built-ins (for example
   `kicad_builtin_opamp`); its path is environment-specific, so includes need
   resolving for portable and CI runs.
+
+## Live simulation session
+
+`Ngspice::session` starts a transient run that the host advances, reads and
+changes, for co-simulation that cannot run to completion first. It sits beside
+the batch backend and does not replace it.
+
+- **Process.** One `ngspice -p` child per session, driven over a pipe. Sessions
+  share no state, so they run in parallel. The deck file is the netlist, one DC
+  voltage source per declared `Drive`, and a `.tran` with an explicit maximum
+  step. The child runs without `DISPLAY` and holds a pseudo-terminal as its
+  controlling terminal, because ngspice with no controlling terminal and no X
+  display crashes before it reads a command. Its home and working directory are
+  the session tempdir, which isolates its configuration and command history.
+- **Include paths.** Top-level `.include` and `.inc` paths resolve from the
+  caller's working directory when the session starts. Relative paths become
+  absolute before the child changes directory; absolute paths stay unchanged.
+  ngspice resolves nested includes relative to their containing library.
+- **Time.** Virtual and monotonic; there is no rollback. `advance_to(t)` sets
+  a solver breakpoint at `t` and a separate stop condition on the time vector,
+  with a relative 1e-12 tolerance. The minimum solver breakpoint spacing is
+  explicitly set to 1e-10 times the maximum step, including on resume.
+- **Resolution.** Two stop times must be at least a thousandth of the maximum
+  step apart. A closer request is an error. A missed landing stops at the first
+  point beyond the tolerance window and returns its actual time, not a run to
+  the end of the analysis.
+- **Events.** `set(node, volts)` alters a drive at the current time. The
+  current time is a breakpoint, where ngspice drops to first-order
+  integration, so the change acts as a step at that time and is not
+  interpolated from the previous point. A read at the time of a change returns
+  the value before it. Changes at one time apply in call order. Voltage
+  accuracy just after a fast edge is bounded by the solver's local truncation
+  error. An exact event timestamp does not guarantee an exact voltage; choose
+  a maximum step below the fastest circuit time constant when needed.
+- **Time zero.** The session solves the operating point at start, from the
+  declared drive values. A drive cannot change at time zero, because ngspice
+  solves the operating point again on resume.
+- **Errors.** ngspice error lines and aborted runs fail the call. Model warnings
+  do not fail a session, consistent with the batch backend.
+- **Limits.** The run ends at the stop time given at start; a drive cannot change
+  there. ngspice keeps every accepted point in memory. Its expression parser
+  copies complete vectors for indexed reads, so each read and advance costs
+  O(stored points), and repeated advances have quadratic total cost. A call
+  blocks until ngspice answers; there is no timeout. Drives are ground-referenced
+  voltage sources only.
 
 ## MCU in the loop
 
