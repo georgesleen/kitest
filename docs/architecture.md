@@ -62,9 +62,9 @@ Single crate first, split only when forced (for example a pure publishable core,
 or to enforce a boundary). Module seams inside the crate mark the eventual splits.
 
 - `kitest` (Rust): the engine. The `Backend` trait, the ngspice batch (subprocess)
-  backend, the `kicad-cli` wrapper, boundary/port derivation and the slicer, and
-  the assertion primitives. An FFI backend and an Xyce backend can follow behind
-  the trait.
+  backend, the live ngspice session, the `kicad-cli` wrapper, boundary/port
+  derivation and the slicer, and the assertion primitives. An FFI backend and an
+  Xyce backend can follow behind the trait.
 - `kitest-py` (PyO3/maturin): the Python binding and the `import kitest` surface
   the testbenches use.
 
@@ -89,6 +89,38 @@ properties kitest relies on:
 - An `.include` of `Simulation_SPICE.sp` is added for built-ins (for example
   `kicad_builtin_opamp`); its path is environment-specific, so includes need
   resolving for portable and CI runs.
+
+## Live simulation session
+
+`Ngspice::session` starts a transient run that the host advances, reads and
+changes, for co-simulation that cannot run to completion first. It sits beside
+the batch backend and does not replace it.
+
+- **Process.** One `ngspice -p` child per session, driven over a pipe. Sessions
+  share no state, so they run in parallel. The deck file is the netlist, one DC
+  voltage source per declared `Drive`, and a `.tran` with an explicit maximum
+  step.
+- **Time.** Virtual and monotonic; there is no rollback. `advance_to(t)` sets
+  `stop when time = t`, which also places a solver breakpoint at `t`, so the
+  run halts on `t` itself. The session checks the landed time against `t` to a
+  relative 1e-12 and returns an error on a miss.
+- **Resolution.** ngspice merges breakpoints that are very close together, so
+  two stop times must be at least a thousandth of the maximum step apart. A
+  closer request is an error, not a silent overrun.
+- **Events.** `set(node, volts)` alters a drive at the current time. The
+  current time is a breakpoint, where ngspice drops to first-order
+  integration, so the change acts as a step at that time and is not
+  interpolated from the previous point. A read at the time of a change returns
+  the value before it. Changes at one time apply in call order.
+- **Time zero.** The session solves the operating point at start, from the
+  declared drive values. A drive cannot change at time zero, because ngspice
+  solves the operating point again on resume.
+- **Errors.** Any ngspice line that starts with `Error` or `Warning`, or reports
+  an abort, fails the call that caused it.
+- **Limits.** The run ends at the stop time given at start. ngspice keeps every
+  accepted point in memory for the life of the session. A call blocks until
+  ngspice answers; there is no timeout. Drives are ground-referenced voltage
+  sources only.
 
 ## MCU in the loop
 
