@@ -103,6 +103,10 @@ the batch backend and does not replace it.
   controlling terminal, because ngspice with no controlling terminal and no X
   display crashes before it reads a command. Its home and working directory are
   the session tempdir, which isolates its configuration and command history.
+- **Include paths.** Top-level `.include` and `.inc` paths resolve from the
+  caller's working directory when the session starts. Relative paths become
+  absolute before the child changes directory; absolute paths stay unchanged.
+  ngspice resolves nested includes relative to their containing library.
 - **Time.** Virtual and monotonic; there is no rollback. `advance_to(t)` sets
   a solver breakpoint at `t` and a separate stop condition on the time vector,
   with a relative 1e-12 tolerance. The minimum solver breakpoint spacing is

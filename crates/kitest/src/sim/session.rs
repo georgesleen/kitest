@@ -3,6 +3,7 @@
 use std::io::{BufRead, BufReader, PipeReader, Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 use rustix::fs::{Mode, OFlags};
@@ -152,8 +153,12 @@ impl Ngspice {
         }
         let dir = tempfile::tempdir().map_err(SessionError::Io)?;
         let deck_path = dir.path().join("deck.cir");
-        std::fs::write(&deck_path, deck(netlist, drives, stop, max_step))
-            .map_err(SessionError::Io)?;
+        let caller = std::env::current_dir().map_err(SessionError::Io)?;
+        std::fs::write(
+            &deck_path,
+            deck(netlist, drives, stop, max_step, &caller),
+        )
+        .map_err(SessionError::Io)?;
 
         let (reader, writer) = std::io::pipe().map_err(SessionError::Io)?;
         let (terminal, follower) = terminal().map_err(SessionError::Io)?;
@@ -421,8 +426,28 @@ fn terminal() -> std::io::Result<(OwnedFd, OwnedFd)> {
 }
 
 /// The deck for a session: `netlist`, one source per drive, and the run.
-fn deck(netlist: &str, drives: &[Drive], stop: f64, max_step: f64) -> String {
-    let mut deck = netlist.to_owned();
+fn deck(
+    netlist: &str,
+    drives: &[Drive],
+    stop: f64,
+    max_step: f64,
+    directory: &Path,
+) -> String {
+    let mut deck = String::with_capacity(netlist.len());
+    for (index, line) in netlist.split_inclusive('\n').enumerate() {
+        if let Some((path, suffix)) = (index > 0)
+            .then(|| include_path(line))
+            .flatten()
+            .filter(|(path, _)| Path::new(path).is_relative())
+        {
+            deck.push_str(".include \"");
+            deck.push_str(&directory.join(path).to_string_lossy());
+            deck.push('"');
+            deck.push_str(suffix);
+        } else {
+            deck.push_str(line);
+        }
+    }
     for (index, drive) in drives.iter().enumerate() {
         deck.push_str(&format!(
             "\n{DRIVE_PREFIX}{n} {node} 0 dc {volts:e}",
@@ -436,6 +461,30 @@ fn deck(netlist: &str, drives: &[Drive], stop: f64, max_step: f64) -> String {
         min_break = MIN_BREAK * max_step,
     ));
     deck
+}
+
+/// The file argument and suffix of an include directive.
+fn include_path(line: &str) -> Option<(&str, &str)> {
+    let (directive, argument) =
+        line.trim_start().split_once(char::is_whitespace)?;
+    if !directive.eq_ignore_ascii_case(".include")
+        && !directive.eq_ignore_ascii_case(".inc")
+    {
+        return None;
+    }
+    let argument = argument.trim_start();
+    if argument.trim().is_empty() {
+        return None;
+    }
+    if let Some(quote) =
+        argument.chars().next().filter(|c| matches!(c, '"' | '\''))
+    {
+        let end = argument[1..].find(quote)? + 1;
+        Some((&argument[1..end], &argument[end + 1..]))
+    } else {
+        let end = argument.find(char::is_whitespace).unwrap_or(argument.len());
+        Some((&argument[..end], &argument[end..]))
+    }
 }
 
 /// The number ngspice printed for `expression`, from a `print` output line.
@@ -481,9 +530,26 @@ mod tests {
     #[test]
     fn deck_appends_drives_and_run() {
         assert_eq!(
-            deck("* rc\nr1 in out 1k", &[Drive::new("in", 0.5)], 1e-3, 1e-6),
+            deck(
+                "* rc\nr1 in out 1k",
+                &[Drive::new("in", 0.5)],
+                1e-3,
+                1e-6,
+                Path::new("/caller")
+            ),
             "* rc\nr1 in out 1k\nvktdrive1 in 0 dc 5e-1\n.options minbreak=1e-16\n.tran 1e-6 1e-3 0 1e-6\n.end\n"
         );
+    }
+
+    #[test]
+    fn include_paths_preserve_absolute_paths_and_directive_suffixes() {
+        let netlist = "* includes\n.include relative.lib $ comment\n.inc 'directory with spaces/child.lib'\n.include \"/absolute/model.lib\"\n* .include ignored.lib\n";
+        let output = deck(netlist, &[], 1e-3, 1e-6, Path::new("/caller"));
+        assert!(output.starts_with(
+            "* includes\n.include \"/caller/relative.lib\" $ comment\n.include \"/caller/directory with spaces/child.lib\"\n.include \"/absolute/model.lib\"\n* .include ignored.lib\n"
+        ));
+        assert_eq!(include_path(".include\n"), None);
+        assert_eq!(include_path(".include \"unterminated\n"), None);
     }
 
     #[test]

@@ -244,6 +244,43 @@ fn a_model_warning_does_not_fail_the_session() {
     session.finish().unwrap();
 }
 
+#[test]
+fn caller_relative_includes_load_nested_libraries_with_model_warnings() {
+    let caller = std::env::current_dir().unwrap();
+    let library = tempfile::Builder::new()
+        .prefix("session library ")
+        .tempdir_in(&caller)
+        .unwrap();
+    std::fs::create_dir(library.path().join("child")).unwrap();
+    std::fs::write(
+        library.path().join("parent.lib"),
+        ".include \"child/model.lib\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        library.path().join("child/model.lib"),
+        ".model q2n3904 npn(is=6.734f bf=416.4 vceo=40 icrating=200m)\n",
+    )
+    .unwrap();
+    let relative = library.path().strip_prefix(&caller).unwrap();
+    let netlist = format!(
+        "* caller-relative libraries\n.include ../../examples/spice/rc.cir\n.INCLUDE \"{}/parent.lib\"\nq1 sense sense 0 q2n3904\nrsense sense 0 1k\n",
+        relative.display()
+    );
+    let mut session = Ngspice::default()
+        .session(&netlist, &[Drive::new("vin", 0.0)], STOP, MAX_STEP)
+        .unwrap();
+    let step = 1e-3;
+    session.advance_to(step).unwrap();
+    session.set("vin", 1.0).unwrap();
+    let sample = step + TAU;
+    session.advance_to(sample).unwrap();
+    assert_landed(&session, sample);
+    assert!((read(&mut session, "vout") - charge(1.0, TAU)).abs() <= VOLTS);
+    assert!(read(&mut session, "sense").abs() <= VOLTS);
+    session.finish().unwrap();
+}
+
 /// Spacings between consecutive advances, as fractions of the maximum step.
 const SPACINGS: [f64; 9] =
     [1.01e-3, 2e-3, 5e-3, 1e-2, 3e-2, 1e-1, 0.3, 1.0, 2.5];
