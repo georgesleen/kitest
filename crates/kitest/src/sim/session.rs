@@ -18,9 +18,11 @@ use crate::{Ngspice, NgspiceError, Voltage};
 /// Relative tolerance between a requested time and the time the solver lands on.
 const TIME_TOLERANCE: f64 = 1e-12;
 
-/// Shortest advance, as a fraction of the maximum step, that ngspice keeps as
-/// a breakpoint.
+/// Shortest advance, as a fraction of the maximum step, that a session accepts.
 const RESOLUTION: f64 = 1e-3;
+
+/// Minimum spacing of solver breakpoints, as a fraction of the maximum step.
+const MIN_BREAK: f64 = 1e-10;
 
 /// Line ngspice echoes back to mark the end of one command batch.
 const SYNC: &str = "kitest-sync";
@@ -119,6 +121,11 @@ pub enum SessionError {
         "a drive cannot change at time zero; give its initial value to Drive::new"
     )]
     AtStart,
+
+    #[error(
+        "a drive cannot change at the stop time {stop} s, where the run ends"
+    )]
+    AtStop { stop: f64 },
 }
 
 impl Ngspice {
@@ -156,6 +163,8 @@ impl Ngspice {
             command
                 .arg("-p")
                 .arg(&deck_path)
+                .env("HOME", dir.path())
+                .current_dir(dir.path())
                 .env_remove("DISPLAY")
                 .stdin(Stdio::piped())
                 .stdout(writer.try_clone().map_err(SessionError::Io)?)
@@ -208,7 +217,9 @@ impl Session {
 
     /// Run the simulation forward to `time` seconds.
     ///
-    /// A `time` equal to the current time does nothing.
+    /// A `time` equal to the current time does nothing. If the solver does
+    /// not land on `time`, the session stops at its first time point after
+    /// `time` and stays usable there.
     ///
     /// # Errors
     ///
@@ -241,9 +252,15 @@ impl Session {
         }
 
         self.started = true;
-        let stop = format!("stop when time = {time:e}");
+        // `v(time)` names the time vector but, unlike `time`, sets no breakpoint.
+        let breakpoint = format!("stop when time = {time:e}");
+        let landing = format!(
+            "stop when v(time) >= {early:e}",
+            early = time * (1.0 - TIME_TOLERANCE)
+        );
         let lines = self.exchange(&[
-            &stop,
+            &breakpoint,
+            &landing,
             "resume",
             "delete all",
             "print time[length(time)-1]",
@@ -251,7 +268,7 @@ impl Session {
         let landed =
             value(&lines, "time[length(time)-1]").ok_or_else(|| {
                 SessionError::Command {
-                    command: stop.clone(),
+                    command: breakpoint.clone(),
                     output: lines.join("\n"),
                 }
             })?;
@@ -270,8 +287,8 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns an error if no drive holds `node`, if the session is still
-    /// at time zero, or if ngspice rejects the change.
+    /// Returns an error if no drive holds `node`, if the session is at time
+    /// zero or at the stop time, or if ngspice rejects the change.
     pub fn set(&mut self, node: &str, volts: f64) -> Result<(), SessionError> {
         finite(volts)?;
         let index = self
@@ -283,6 +300,9 @@ impl Session {
             })?;
         if !self.started {
             return Err(SessionError::AtStart);
+        }
+        if same_time(self.now, self.stop) {
+            return Err(SessionError::AtStop { stop: self.stop });
         }
         let alter =
             format!("alter {DRIVE_PREFIX}{n} dc = {volts:e}", n = index + 1);
@@ -305,16 +325,7 @@ impl Session {
         } else {
             vector
         };
-        let lines = match self.exchange(&[&format!("print {expression}")]) {
-            Err(SessionError::Command { output, .. })
-                if output.contains("is not available") =>
-            {
-                return Err(SessionError::UnknownNode {
-                    node: node.to_owned(),
-                });
-            }
-            result => result?,
-        };
+        let lines = self.exchange(&[&format!("print {expression}")])?;
         value(&lines, &expression).map(Voltage::new).ok_or_else(|| {
             SessionError::UnknownNode {
                 node: node.to_owned(),
@@ -421,7 +432,8 @@ fn deck(netlist: &str, drives: &[Drive], stop: f64, max_step: f64) -> String {
         ));
     }
     deck.push_str(&format!(
-        "\n.tran {max_step:e} {stop:e} 0 {max_step:e}\n.end\n"
+        "\n.options minbreak={min_break:e}\n.tran {max_step:e} {stop:e} 0 {max_step:e}\n.end\n",
+        min_break = MIN_BREAK * max_step,
     ));
     deck
 }
@@ -437,15 +449,15 @@ fn value(lines: &[String], expression: &str) -> Option<f64> {
     })
 }
 
-/// Whether an ngspice output line reports an error, a warning, or an abort.
+/// Whether an ngspice output line reports an error or an aborted run.
 fn is_problem(line: &str) -> bool {
     if line.starts_with(NO_DISPLAY) {
         return false;
     }
-    let line = line.trim_start().to_lowercase();
-    line.starts_with("error")
-        || line.starts_with("warning")
-        || line.contains("aborted")
+    let line = line.trim();
+    line.to_lowercase().starts_with("error")
+        || line.ends_with(" simulation(s) aborted")
+        || line == "simulation aborted"
 }
 
 /// Whether two times are equal within [`TIME_TOLERANCE`].
@@ -470,7 +482,7 @@ mod tests {
     fn deck_appends_drives_and_run() {
         assert_eq!(
             deck("* rc\nr1 in out 1k", &[Drive::new("in", 0.5)], 1e-3, 1e-6),
-            "* rc\nr1 in out 1k\nvktdrive1 in 0 dc 5e-1\n.tran 1e-6 1e-3 0 1e-6\n.end\n"
+            "* rc\nr1 in out 1k\nvktdrive1 in 0 dc 5e-1\n.options minbreak=1e-16\n.tran 1e-6 1e-3 0 1e-6\n.end\n"
         );
     }
 
@@ -485,12 +497,21 @@ mod tests {
     }
 
     #[test]
-    fn errors_and_warnings_are_problems() {
+    fn errors_and_aborts_are_problems() {
         assert!(is_problem("Error: indexing a scalar (time)"));
-        assert!(is_problem(
+        assert!(is_problem("ERROR: fatal error in ngspice, exit(1)"));
+        assert!(is_problem("run simulation(s) aborted"));
+        assert!(is_problem("simulation aborted"));
+    }
+
+    #[test]
+    fn warnings_and_echoes_are_not_problems() {
+        assert!(!is_problem(
             "Warning from checkvalid: vector x is not available"
         ));
-        assert!(is_problem("run simulation(s) aborted"));
+        assert!(!is_problem("unrecognized parameter (vceo) - ignored"));
+        assert!(!is_problem("ngspice 12 -> print v(aborted_flag)"));
+        assert!(!is_problem("v(aborted_flag) = 1.0e+00"));
         assert!(!is_problem("doAnalyses: pause requested"));
         assert!(!is_problem(&format!("{NO_DISPLAY}\n")));
     }

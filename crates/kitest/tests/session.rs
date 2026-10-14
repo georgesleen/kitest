@@ -206,9 +206,19 @@ fn reading_an_absent_node_is_an_error() {
 }
 
 #[test]
-fn a_broken_netlist_is_an_error() {
+fn setting_a_drive_at_the_stop_time_is_an_error() {
+    let mut session = rc_session();
+    session.advance_to(STOP).unwrap();
+    assert!(matches!(
+        session.set("vin", 1.0),
+        Err(SessionError::AtStop { .. })
+    ));
+}
+
+#[test]
+fn a_netlist_error_is_an_error() {
     let result = Ngspice::default().session(
-        "* broken\nr1 vin\n",
+        "* broken\nx1 vin vout nosub\n",
         &[Drive::new("vin", 0.0)],
         STOP,
         MAX_STEP,
@@ -218,4 +228,65 @@ fn a_broken_netlist_is_an_error() {
         "{:?}",
         result.err()
     );
+}
+
+#[test]
+fn a_model_warning_does_not_fail_the_session() {
+    // ngspice warns that the BJT model ignores `vceo` and `icrating`.
+    let netlist = format!(
+        "{RC}\nq1 vout vout 0 q2n3904\n.model q2n3904 npn(is=6.734f bf=416.4 vceo=40 icrating=200m)\n"
+    );
+    let mut session = Ngspice::default()
+        .session(&netlist, &[Drive::new("vin", 0.0)], STOP, MAX_STEP)
+        .unwrap();
+    session.advance_to(1e-3).unwrap();
+    assert!(read(&mut session, "vout").abs() <= VOLTS);
+    session.finish().unwrap();
+}
+
+/// Spacings between consecutive advances, as fractions of the maximum step.
+const SPACINGS: [f64; 9] =
+    [1.01e-3, 2e-3, 5e-3, 1e-2, 3e-2, 1e-1, 0.3, 1.0, 2.5];
+
+/// Advances in one run of [`lands_every_sequential_advance`].
+const ADVANCES: u32 = 200;
+
+/// Advance a session `ADVANCES` times at each spacing in `SPACINGS`, and
+/// assert that every advance lands on its requested time.
+fn lands_every_sequential_advance(max_step: f64) {
+    let base = 500.0 * max_step;
+    let stop = base + ADVANCES as f64 * 2.5 * max_step;
+    for spacing in SPACINGS {
+        let mut session = Ngspice::default()
+            .session(RC, &[Drive::new("vin", 1.0)], stop, max_step)
+            .unwrap();
+        for index in 0..=ADVANCES {
+            let time = base + index as f64 * spacing * max_step;
+            session.advance_to(time).unwrap_or_else(|error| {
+                panic!("max step {max_step} s, spacing {spacing}: {error}")
+            });
+            assert_landed(&session, time);
+        }
+        session.finish().unwrap();
+    }
+}
+
+#[test]
+fn sequential_advances_land_at_a_max_step_of_1_ms() {
+    lands_every_sequential_advance(1e-3);
+}
+
+#[test]
+fn sequential_advances_land_at_a_max_step_of_10_us() {
+    lands_every_sequential_advance(1e-5);
+}
+
+#[test]
+fn sequential_advances_land_at_a_max_step_of_1_us() {
+    lands_every_sequential_advance(1e-6);
+}
+
+#[test]
+fn sequential_advances_land_at_a_max_step_of_1_ns() {
+    lands_every_sequential_advance(1e-9);
 }
